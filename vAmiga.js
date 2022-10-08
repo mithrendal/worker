@@ -955,10 +955,10 @@ var tempI64;
 // === Body ===
 
 var ASM_CONSTS = {
-  123436: ($0) => { if (typeof message_handler === 'undefined') return; message_handler( "MSG_"+UTF8ToString($0) ); },  
- 123536: ($0, $1, $2) => { if (typeof message_handler === 'undefined') return; message_handler( "MSG_"+UTF8ToString($0), $1, $2 ); },  
- 123644: () => { scaleVMCanvas() },  
- 123662: () => { setTimeout(function() {message_handler( 'MSG_ROM_MISSING' );}, 0); }
+  123420: ($0) => { if (typeof message_handler === 'undefined') return; message_handler( "MSG_"+UTF8ToString($0) ); },  
+ 123520: ($0, $1, $2) => { if (typeof message_handler === 'undefined') return; message_handler( "MSG_"+UTF8ToString($0), $1, $2 ); },  
+ 123628: () => { scaleVMCanvas() },  
+ 123646: () => { setTimeout(function() {message_handler( 'MSG_ROM_MISSING' );}, 0); }
 };
 function console_log(str) { console.log(UTF8ToString(str)); }
 
@@ -6243,8 +6243,8 @@ var dynCall_iiiiiijj = Module["dynCall_iiiiiijj"] = function() {
   return (dynCall_iiiiiijj = Module["dynCall_iiiiiijj"] = Module["asm"]["dynCall_iiiiiijj"]).apply(null, arguments);
 };
 
-var ___start_em_js = Module['___start_em_js'] = 123733;
-var ___stop_em_js = Module['___stop_em_js'] = 123790;
+var ___start_em_js = Module['___start_em_js'] = 123717;
+var ___stop_em_js = Module['___stop_em_js'] = 123774;
 function invoke_ii(index,a1) {
   var sp = stackSave();
   try {
