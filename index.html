@@ -13,7 +13,8 @@
       };
     } else if (reg.active) {
       // something's not right or SW is bypassed.  previously-installed SW should have redirected this request to different page
-      handleError(new Error('Service Worker is installed and not redirecting.'))
+      //handleError(new Error('Service Worker is installed and not redirecting.'))
+      window.location.replace('vAmiga.html');
     }
   })
   .catch(handleError)
