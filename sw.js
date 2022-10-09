@@ -1,6 +1,6 @@
 const url_root_path= self.location.pathname.replace("/sw.js","");
 const core_version  = '3.0b1'; //has to be the same as the version in Emulator/config.h
-const ui_version = '2022_10_08'+url_root_path.replace("/","_");
+const ui_version = '2022_10_08b'+url_root_path.replace("/","_");
 const cache_name = `${core_version}@${ui_version}`;
 const settings_cache = 'settings';
 
@@ -135,7 +135,12 @@ self.addEventListener('fetch', function(event){
 	      //https://stackoverflow.com/questions/29246444/fetch-how-do-you-make-a-non-cached-request 
         
         //to cache vAmiga.html instead of the sw installer index.html 
+        let orig_url=event.request.url;
         event.request.url = event.request.url.replace('index.html','vAmiga.html');
+        if(event.request.url.endsWith(url_root_path+'/'))
+        {
+          event.request.url += 'vAmiga.html';
+        }
         var networkResponsePromise = fetch(event.request, {cache: "no-cache"});
         event.waitUntil(
           async function () 
@@ -145,7 +150,7 @@ self.addEventListener('fetch', function(event){
               if(networkResponse.status == 200)
               {
                 console.log(`sw: status=200 into ${active_cache_name} putting fetched resource: ${event.request.url}`);
-                event.request.url = event.request.url.replace('vAmiga.html','index.html');
+                event.request.url = orig_url;
                 await cache.put(event.request, networkResponse.clone());
               }
               else
