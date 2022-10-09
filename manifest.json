@@ -4,7 +4,7 @@
   "start_url": "/worker/",
   "id": "/worker/",
   "scope": ".",
-  "display": "fullscreen",
+  "display": "standalone",
   "background_color": "black",
   "theme_color": "black",
   "icons": [
