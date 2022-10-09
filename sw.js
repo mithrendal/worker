@@ -1,6 +1,6 @@
 const url_root_path= self.location.pathname.replace("/sw.js","");
 const core_version  = '3.0b1'; //has to be the same as the version in Emulator/config.h
-const ui_version = '2022_10_08e'+url_root_path.replace("/","_");
+const ui_version = '2022_10_08f'+url_root_path.replace("/","_");
 const cache_name = `${core_version}@${ui_version}`;
 const settings_cache = 'settings';
 
@@ -136,10 +136,11 @@ self.addEventListener('fetch', function(event){
         
         //to cache vAmiga.html instead of the sw installer index.html 
         let sw_request=event.request;
-        if(event.request.url.endsWith(url_root_path+'/'))
+/*        if(event.request.url.endsWith(url_root_path+'/'))
         {
           sw_request = `${event.request.url}vAmiga.html`;
         }
+*/
         var networkResponsePromise = fetch(sw_request, {cache: "no-cache"});
         event.waitUntil(
           async function () 
