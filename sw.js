@@ -93,11 +93,6 @@ self.addEventListener('fetch', function(event){
   event.respondWith(async function () {
       //is this url one that should not be cached at all ? 
       if(
-        event.request.url.startsWith('https://csdb.dk/webservice/') && 
-        !event.request.url.endsWith('cache_me=true')
-        ||
-        event.request.url.startsWith('https://mega65.github.io/')
-        ||
         event.request.url.toLowerCase().startsWith('https://vamigaweb.github.io/doc')
         ||
         event.request.url.toLowerCase().endsWith('vamigaweb_player.js')
@@ -138,6 +133,9 @@ self.addEventListener('fetch', function(event){
       	//with no-cache because we dont want to cache a 304 response ...
 	      //learn more here
 	      //https://stackoverflow.com/questions/29246444/fetch-how-do-you-make-a-non-cached-request 
+        
+        //to cache vAmiga.html instead of the sw installer index.html 
+        event.request.url = event.request.url.replace('index.html','vAmiga.html');
         var networkResponsePromise = fetch(event.request, {cache: "no-cache"});
         event.waitUntil(
           async function () 
@@ -147,6 +145,7 @@ self.addEventListener('fetch', function(event){
               if(networkResponse.status == 200)
               {
                 console.log(`sw: status=200 into ${active_cache_name} putting fetched resource: ${event.request.url}`);
+                event.request.url = event.request.url.replace('vAmiga.html','index.html');
                 await cache.put(event.request, networkResponse.clone());
               }
               else
