@@ -1,6 +1,6 @@
 const url_root_path= self.location.pathname.replace("/sw.js","");
 const core_version  = '3.0b1'; //has to be the same as the version in Emulator/config.h
-const ui_version = '2022_10_08i'+url_root_path.replace("/","_");
+const ui_version = '2022_10_19'+url_root_path.replace("/","_");
 const cache_name = `${core_version}@${ui_version}`;
 const settings_cache = 'settings';
 
@@ -141,12 +141,11 @@ self.addEventListener('fetch', function(event){
           sw_request = `${event.request.url}vAmiga.html`;
         }
 */
-        var networkResponsePromise = fetch(sw_request, {cache: "no-cache"});
+        var networkResponse = await fetch(sw_request, {cache: "no-cache"});
         event.waitUntil(
           async function () 
           {
             try {
-              var networkResponse = await networkResponsePromise;
               if(networkResponse.status == 200)
               {
                 console.log(`sw: status=200 into ${active_cache_name} putting fetched resource: ${event.request.url}`);
@@ -162,17 +161,16 @@ self.addEventListener('fetch', function(event){
         );   
 
 
-        const newHeaders = new Headers(networkResponsePromise.headers);
+        const newHeaders = new Headers(networkResponse.headers);
         newHeaders.set("Cross-Origin-Embedder-Policy", "require-corp");
         newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
 
-        const moddedResponse = new Response(networkResponsePromise.body, {
-          status: networkResponsePromise.status,
-          statusText: networkResponsePromise.statusText,
+        const moddedResponse = new Response(networkResponse.body, {
+          status: networkResponse.status,
+          statusText: networkResponse.statusText,
           headers: newHeaders,
         });
         return moddedResponse;
-//        return networkResponsePromise;
       }
    }());
 });
