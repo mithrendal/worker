@@ -23,7 +23,7 @@ let HBLANK_MIN=0x12*4*4;
 let HPIXELS=912;
 let PAL_EXTRA_VPIXELS=140;
 let VPIXELS=313;
-let xOff = 0;//252;
+let xOff = 0;//252
 let yOff=26 + 6;
 let clipped_width=HPIXELS-xOff;
 let clipped_height=VPIXELS+PAL_EXTRA_VPIXELS ;
@@ -1368,6 +1368,13 @@ function InitWrappers() {
     ctx=null;
 
 
+
+    document.getElementById("canvas").height=VPIXELS-yOff;
+    document.getElementById("canvas").width=clipped_width-0x12*4-4;
+  
+    clipped_height=(3*clipped_width/4 /*+(ntsc?0:32)*/ /*32 due to PAL?*/) & 0xfffe;
+
+
     wasm_run = function () {
         Module._wasm_run();       
         if(do_animation_frame == null)
@@ -1377,6 +1384,7 @@ function InitWrappers() {
                 queued_executes--;
             };
             do_animation_frame = function(now) {
+                draw_one_frame(); //gather joystick information before executing frame                
                 let behind = Module._wasm_draw_one_frame(now);
                 let pixels = Module._wasm_pixel_buffer();
 
@@ -1384,8 +1392,8 @@ function InitWrappers() {
                 {
                     const canvas = document.getElementById('canvas');
                     ctx = canvas.getContext('2d');
-                    image_data=ctx.createImageData(clipped_width,VPIXELS+PAL_EXTRA_VPIXELS);
-                    pixel_buffer=new Uint8Array(Module.HEAPU32.buffer, pixels+HBLANK_MIN, (clipped_width-HBLANK_MIN)*(VPIXELS+PAL_EXTRA_VPIXELS)*4);
+                    image_data=ctx.createImageData(clipped_width,clipped_height/*VPIXELS+PAL_EXTRA_VPIXELS-yOff*/);
+                    pixel_buffer=new Uint8Array(Module.HEAPU32.buffer, pixels+HBLANK_MIN+yOff*HPIXELS*4+xOff*4, (clipped_width-HBLANK_MIN)*(VPIXELS-yOff+PAL_EXTRA_VPIXELS)*4);
                 }
                 //let pixel_data = new Uint8Array(pixel_buffer, xOff+HBLANK_MIN/* offset  */, (clipped_width-HBLANK_MIN)*clipped_height*4);
                 //data.set(snapshot_data.subarray(0, data.length), 0);
@@ -1408,13 +1416,10 @@ function InitWrappers() {
                       SDL_RenderCopy(renderer, screen_texture, &SrcR, NULL);
                   */
 
-                draw_one_frame(); // to gather joystick information 
-                
                 while(behind>queued_executes)
                 {
                     queued_executes++;
                     setTimeout(execute_amiga_frame);
-                    //execute_amiga_frame();
                 }
 
                 // request another animation frame
@@ -1499,8 +1504,6 @@ function InitWrappers() {
             {
                 soundbuffer_slots.push(
                     new Float32Array(Module.HEAPF32.buffer, sound_buffer_address+(slot*2048)*4, 2048));
-                
-                worklet_node.port.postMessage({cmd:'create_slot',id:slot,slot:soundbuffer_slots[slot]});
             }
         }
         init_sound_buffer();
@@ -1514,7 +1517,7 @@ function InitWrappers() {
         worklet_node.port.onmessage = (msg) => {
             //direct c function calls with preceeding Module._ are faster than cwrap
             let samples=Module._wasm_copy_into_sound_buffer();
-/*          let shuttle = msg.data;
+            let shuttle = msg.data;
             if(samples<1024)
             {
                 if(shuttle!="empty")
@@ -1523,11 +1526,10 @@ function InitWrappers() {
                 }
                 return;
             }
-*/
             let slot=0;
             while(samples>=1024)
             {
-/*                if(shuttle == null || shuttle=="empty")
+                if(shuttle == null || shuttle=="empty")
                 {
                     if(!empty_shuttles.isEmpty())
                     {
@@ -1538,17 +1540,15 @@ function InitWrappers() {
                       return;
                     }
                 }
-*/
                 let wasm_buffer_slot = soundbuffer_slots[slot++];
                 if(wasm_buffer_slot.byteLength==0)
                 {//slot can be detached when wasm had grown memory, adresses are wrong then so lets reinit
                     init_sound_buffer();
-//                    wasm_buffer_slot = soundbuffer_slots[slot-1];
+                    wasm_buffer_slot = soundbuffer_slots[slot-1];
                 }
-                //shuttle.set(wasm_buffer_slot);
-                //worklet_node.port.postMessage(shuttle, [shuttle.buffer]);
-                worklet_node.port.postMessage({cmd:'write',id:(slot-1)});
-//                shuttle=null;
+                shuttle.set(wasm_buffer_slot);
+                worklet_node.port.postMessage(shuttle, [shuttle.buffer]);
+                shuttle=null;
                 samples-=1024;
             }            
         };
@@ -3831,18 +3831,20 @@ function setTheme() {
 function scaleVMCanvas() {
         let the_canvas = document.getElementById("canvas");
         var src_width=clipped_width;//Module._wasm_get_render_width();
-        var src_height=clipped_height*2;//Module._wasm_get_render_height()*2; 
+        var src_height=(clipped_height);//*2;//Module._wasm_get_render_height()*2; 
                 
         if(use_ntsc_pixel)
         {
             src_height*=52/44;
         }
         var src_ratio = src_width/src_height; //1.25
-/*        if(Module._wasm_get_renderer()==0)
+        /*
+        if(Module._wasm_get_renderer()==0)
         {//software renderer only has half of height pixels
             src_height*=2;
             src_ratio = src_width/src_height;
-        }*/
+        }
+        */
 
         var inv_src_ratio = src_height/src_width;
         var wratio = window.innerWidth / window.innerHeight;
