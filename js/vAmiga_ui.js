@@ -1376,7 +1376,7 @@ function InitWrappers() {
 
 
     wasm_run = function () {
-        Module._wasm_run();       
+        Module._wasm_run();         
         if(do_animation_frame == null)
         {
             execute_amiga_frame=()=>{
@@ -1385,9 +1385,9 @@ function InitWrappers() {
             };
             do_animation_frame = function(now) {
                 draw_one_frame(); //gather joystick information before executing frame                
-                let behind = Module._wasm_draw_one_frame(now);
+                //let behind = Module._wasm_draw_one_frame(now);
                 let pixels = Module._wasm_pixel_buffer();
-
+                
                 if(ctx == null)
                 {
                     const canvas = document.getElementById('canvas');
@@ -1415,12 +1415,14 @@ function InitWrappers() {
                   
                       SDL_RenderCopy(renderer, screen_texture, &SrcR, NULL);
                   */
-
+/*
                 while(behind>queued_executes)
                 {
                     queued_executes++;
                     setTimeout(execute_amiga_frame);
                 }
+*/
+                Module._wasm_worker_run();
 
                 // request another animation frame
                 if(!stop_request_animation_frame)
