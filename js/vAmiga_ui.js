@@ -1374,7 +1374,7 @@ function InitWrappers() {
   
     clipped_height=(3*clipped_width/4 /*+(ntsc?0:32)*/ /*32 due to PAL?*/) & 0xfffe;
 
-
+    canvas.addEventListener('touchmove',function(e){e.preventDefault()},false);
     wasm_run = function () {
         Module._wasm_run();         
         if(do_animation_frame == null)
