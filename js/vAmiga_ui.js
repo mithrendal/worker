@@ -1,6 +1,6 @@
 let global_apptitle="vAmiga - start screen"
 let call_param_openROMS=false;
-let call_param_2ndSID=null;
+let call_param_gpu=null;
 let call_param_navbar=null;
 let call_param_wide=null;
 let call_param_border=null;
@@ -9,25 +9,21 @@ let call_param_dark=null;
 let call_param_buttons=[];
 let call_param_dialog_on_missing_roms=null;
 let call_param_dialog_on_disk=null;
-let call_param_SID=null;
 let call_param_mouse=null;
 let call_param_warpto=null;
 let call_param_url=null;
 let call_param_display=null;
+let call_param_wait_for_kickstart_injection=null;
+let call_param_kickstart_rom_url=null;
+
+let startup_script_executed=false;
+let df_mount_list=[];//to auto mount disks from zip e.g. ["Batman_Rises_disk1.adf","Batman_Rises_disk2.adf"];
+let hd_mount_list=[];
 
 let virtual_keyboard_clipping = true; //keyboard scrolls when it clips
 let use_wide_screen=false;
 let use_ntsc_pixel=false;
-
-let HBLANK_MIN=0x12*4*4;
-let HPIXELS=912;
-let PAL_EXTRA_VPIXELS=140;
-let VPIXELS=313;
-let xOff = 0;//252
-let yOff=26 + 6;
-let clipped_width=HPIXELS-xOff;
-let clipped_height=VPIXELS+PAL_EXTRA_VPIXELS ;
-
+let joystick_button_count=1;
 
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 const audioContext = new AudioContext();
@@ -143,6 +139,9 @@ function get_parameter_link()
         call_param_warpto=call_obj.warpto === undefined ? null : call_obj.warpto;
         call_param_mouse=call_obj.mouse === undefined ? null : call_obj.mouse;
         call_param_display=call_obj.display === undefined ? null : call_obj.display;
+        call_param_wait_for_kickstart_injection=call_obj.wait_for_kickstart_injection === undefined ? null : call_obj.wait_for_kickstart_injection;
+        call_param_kickstart_rom_url=call_obj.kickstart_rom_url === undefined ? null : call_obj.kickstart_rom_url;
+        call_param_gpu = call_obj.gpu === undefined ? null : call_obj.gpu;
 
         if(call_obj.touch)
         {
@@ -182,6 +181,15 @@ function get_parameter_link()
                 b.app_scope = true;
                 b.id = 1000+call_param_buttons.length;
                 call_param_buttons.push( b );
+            }
+        }
+        if(call_obj.startup_script !== undefined && startup_script_executed==false)
+        {
+            try {
+                new Function(`${call_obj.startup_script}`)();
+                startup_script_executed=true;
+            } catch (error) {
+                console.error(`error in startup_script: ${call_obj.startup_script}`,e)
             }
         }
     }
@@ -284,7 +292,7 @@ function get_parameter_link()
 
 
 var parameter_link__already_checked=false;
-
+var parameter_link_mount_in_df0=false;
 function load_parameter_link()
 {
     if($('#modal_roms').is(":visible"))
@@ -299,9 +307,8 @@ function load_parameter_link()
     var parameter_link = get_parameter_link();
     if(parameter_link != null)
     {
-        //setTimeout(() => {
+        parameter_link_mount_in_df0=parameter_link.match(/[.](adf|hdf|dms|exe)$/i);
         get_data_collector("csdb").run_link("call_parameter", 0,parameter_link);            
-        //}, 10);
     }
 }
 
@@ -361,7 +368,19 @@ function message_handler(msg, data, data2)
     {        
         //try to load roms from local storage
         setTimeout(async function() {
-            if(false == await load_roms(true))
+            if(call_param_wait_for_kickstart_injection)
+            {
+                //don't auto load existing kick roms
+                //instead wait for external commands
+            }
+            else if(call_param_kickstart_rom_url != null)
+            {//this needs to be samesite or cross origin with CORS enabled
+                let byteArray=new Uint8Array(await (await fetch(call_param_kickstart_rom_url)).arrayBuffer());
+                let rom_type=wasm_loadfile("kick.rom_file", byteArray);
+                wasm_reset();
+            }
+            //try to load currently user selected kickstart
+            else if(false == await load_roms(true))
             {
                 get_parameter_link(); //just make sure the parameters are set
                 if(call_param_openROMS==true)
@@ -391,8 +410,14 @@ function message_handler(msg, data, data2)
     }
     else if(msg == "MSG_DRIVE_STEP" || msg == "MSG_DRIVE_POLL")
     {
-        play_sound(audio_df_step);   
-        $("#drop_zone").html(`df${data} ${data2.toString().padStart(2, '0')}`);
+        if(wasm_has_disk("df"+data)){
+            play_sound(audio_df_step);
+            $("#drop_zone").html(`df${data} ${data2.toString().padStart(2, '0')}`);
+        }
+        else if (data==0)
+        {//only for df0: play stepper sound in case of no disk
+            play_sound(audio_df_step);
+        }
     }
     else if(msg == "MSG_DISK_INSERT")
     {
@@ -400,13 +425,13 @@ function message_handler(msg, data, data2)
     }
     else if(msg == "MSG_DISK_EJECT")
     {
-        $("#drop_zone").html(`df${data} eject`);
+        $("#drop_zone").html(`file slot`);
         play_sound(audio_df_eject); 
     }
     else if(msg == "MSG_HDR_STEP")
     {
-        play_sound(audio_hd_step); 
-     //   console.log(`MSG_DRIVE_STEP ${data} ${data2}`);
+        play_sound(audio_hd_step);
+        //   console.log(`MSG_DRIVE_STEP ${data} ${data2}`);
         $("#drop_zone").html(`dh${data} ${data2}`);
     }
     else if(msg == "MSG_SNAPSHOT_RESTORED")
@@ -432,11 +457,11 @@ function message_handler(msg, data, data2)
         $(`#button_${"OPT_CHIP_RAM"}`).text(`chip ram=${wasm_get_config_item('CHIP_RAM')} KB (snapshot)`);
         $(`#button_${"OPT_SLOW_RAM"}`).text(`slow ram=${wasm_get_config_item('SLOW_RAM')} KB (snapshot)`);
         $(`#button_${"OPT_FAST_RAM"}`).text(`fast ram=${wasm_get_config_item('FAST_RAM')} KB (snapshot)`);
+    
+        rom_restored_from_snapshot=true;
     }
 
 }
-rs232_message = "";
-//rs232_message=[];
 
 async function fetchOpenROMS(){
     var installer = async function(suffix, response) {
@@ -449,12 +474,14 @@ async function fetchOpenROMS(){
             var romtype = wasm_loadfile(rom_name+suffix, byteArray);
             if(romtype != "")
             {
-                localStorage.setItem(romtype, rom_name);
-                save_rom(rom_name,romtype, byteArray);
-                load_roms(true);
+                local_storage_set(romtype, rom_name);
+                await save_rom(rom_name,romtype, byteArray);
+                await load_roms(true);
             }
         } catch {
             console.log ("could not install system rom file");
+            fill_rom_icons();
+            fill_ext_icons();
         }  
     }
     
@@ -464,6 +491,75 @@ async function fetchOpenROMS(){
     await installer('.rom_ext_file', response);   
 }
 
+
+function fill_rom_icons(){
+    let rom_infos=JSON.parse(wasm_rom_info());
+    let icon="img/rom.png";
+    if(rom_infos.hasRom == "false")
+    {
+        icon="img/rom_empty.png";
+    }
+    else if(rom_infos.romTitle.toLowerCase().indexOf("aros")>=0)
+    {
+        icon="img/rom_aros.png";
+    }
+    else if(rom_infos.romTitle.toLowerCase().indexOf("unknown")>=0)
+    {
+        icon="img/rom_unknown.png";
+    }
+    else if(rom_infos.romTitle.toLowerCase().indexOf("patched")>=0)
+    {
+        icon="img/rom_patched.png";
+    }
+    else if(rom_infos.romTitle.toLowerCase().indexOf("hyperion")>=0)
+    {
+        icon="img/rom_hyperion.png";
+    }
+    else
+    {
+        icon="img/rom_original.png";
+    }
+
+    $("#rom_kickstart").attr("src", icon);
+    $("#kickstart_title").html(`${rom_infos.romTitle}<br>${rom_infos.romVersion}<br>${rom_infos.romReleased}<br>${rom_infos.romModel}`);
+
+    $("#button_delete_kickstart").show();
+}
+
+function fill_ext_icons()
+{
+    let rom_infos=JSON.parse(wasm_rom_info());
+    let icon="img/rom.png";
+    if(rom_infos.hasExt == "false")
+    {
+        icon="img/rom_empty.png";
+    }
+    else if(rom_infos.extTitle.toLowerCase().indexOf("aros")>=0)
+    {
+        icon="img/rom_aros.png";
+    }
+    else if(rom_infos.extTitle.toLowerCase().indexOf("unknown")>=0)
+    {
+        icon="img/rom_unknown.png";
+    }
+    else if(rom_infos.extTitle.toLowerCase().indexOf("patched")>=0)
+    {
+        icon="img/rom_patched.png";
+    }
+    else if(rom_infos.romTitle.toLowerCase().indexOf("hyperion")>=0)
+    {
+        icon="img/rom_hyperion.png";
+    }
+    else
+    {
+        icon="img/rom_original.png";
+    }
+
+    $("#rom_kickstart_ext").attr("src", icon);
+    $("#kickstart_ext_title").html(`${rom_infos.extTitle}<br>${rom_infos.extVersion}<br>${rom_infos.extReleased}<br>${rom_infos.extModel}`);
+
+    $("#button_delete_kickstart_ext").show();
+}
 
 /**
 * load_roms
@@ -479,11 +575,12 @@ async function fetchOpenROMS(){
  *
  * TODO: maybe split up functionality into load_roms() and refresh_rom_dialog() 
  */
+
 async function load_roms(install_to_core){
     var loadStoredItem= async function (item_name, type){
         if(item_name==null)
             return null;
-        //var stored_item = localStorage.getItem(item_name); 
+        //var stored_item = local_storage_get(item_name); 
         let stored_item = await load_rom(item_name);
         if(stored_item != null)
         {
@@ -496,7 +593,7 @@ async function load_roms(install_to_core){
                 if(!romtype.endsWith("rom") && !romtype.endsWith("rom_ext"))
                 {//in case the core thinks rom is not valid anymore delete it
                     delete_rom(item_name);
-//                    localStorage.removeItem(item_name);
+//                    local_storage_remove(item_name);
                     return null;
                 }
             }
@@ -514,7 +611,7 @@ async function load_roms(install_to_core){
     
     var all_fine = true;
     try{
-        let selected_rom=localStorage.getItem('rom');
+        let selected_rom=local_storage_get('rom');
         let the_rom=await loadStoredItem(selected_rom, ".rom_file");
         if (the_rom==null){
             all_fine=false;
@@ -525,44 +622,14 @@ async function load_roms(install_to_core){
         }
         else
         {
-            let rom_infos=JSON.parse(wasm_rom_info());
-            let icon="img/rom.png";
-            if(rom_infos.hasRom == "false")
-            {
-                icon="img/rom_empty.png";
-            }
-            else if(rom_infos.romTitle.toLowerCase().indexOf("aros")>=0)
-            {
-                icon="img/rom_aros.png";
-            }
-            else if(rom_infos.romTitle.toLowerCase().indexOf("unknown")>=0)
-            {
-                icon="img/rom_unknown.png";
-            }
-            else if(rom_infos.romTitle.toLowerCase().indexOf("patched")>=0)
-            {
-                icon="img/rom_patched.png";
-            }
-            else if(rom_infos.romTitle.toLowerCase().indexOf("hyperion")>=0)
-            {
-                icon="img/rom_hyperion.png";
-            }
-            else
-            {
-                icon="img/rom_original.png";
-            }
- 
-            $("#rom_kickstart").attr("src", icon);
-            $("#kickstart_title").html(`${rom_infos.romTitle}<br>${rom_infos.romVersion}<br>${rom_infos.romReleased}<br>${rom_infos.romModel}`);
-
-            $("#button_delete_kickstart").show();
+            fill_rom_icons();
         }
     } catch(e){
         all_fine=false; //maybe it needs a rom extension file
         console.error(e);
     }
     try{
-        let selected_rom_ext=localStorage.getItem('rom_ext');
+        let selected_rom_ext=local_storage_get('rom_ext');
         let the_rom_ext=await loadStoredItem(selected_rom_ext,".rom_ext_file");
         if (the_rom_ext==null){
             $("#rom_kickstart_ext").attr("src", "img/rom_empty.png");
@@ -572,37 +639,7 @@ async function load_roms(install_to_core){
         }
         else
         {
-            let rom_infos=JSON.parse(wasm_rom_info());
-            let icon="img/rom.png";
-            if(rom_infos.hasExt == "false")
-            {
-                icon="img/rom_empty.png";
-            }
-            else if(rom_infos.extTitle.toLowerCase().indexOf("aros")>=0)
-            {
-                icon="img/rom_aros.png";
-            }
-            else if(rom_infos.extTitle.toLowerCase().indexOf("unknown")>=0)
-            {
-                icon="img/rom_unknown.png";
-            }
-            else if(rom_infos.extTitle.toLowerCase().indexOf("patched")>=0)
-            {
-                icon="img/rom_patched.png";
-            }
-            else if(rom_infos.romTitle.toLowerCase().indexOf("hyperion")>=0)
-            {
-                icon="img/rom_hyperion.png";
-            }
-            else
-            {
-                icon="img/rom_original.png";
-            }
-
-            $("#rom_kickstart_ext").attr("src", icon);
-            $("#kickstart_ext_title").html(`${rom_infos.extTitle}<br>${rom_infos.extVersion}<br>${rom_infos.extReleased}<br>${rom_infos.extModel}`);
-
-            $("#button_delete_kickstart_ext").show();
+            fill_ext_icons();
         }
     } catch(e){
         console.error(e);
@@ -711,6 +748,9 @@ function pushFile(file) {
         file_slot_file_name = file.name;
         file_slot_file = new Uint8Array(this.result);
         configure_file_dialog();
+        //we have to null the file input otherwise when ejecting and inserting the same
+        //file again it would not trigger the onchange/onload event 
+        document.getElementById('filedialog').value=null;
     }
     fileReader.readAsArrayBuffer(file);
 }
@@ -727,20 +767,25 @@ function configure_file_dialog(reset=false)
                 , file_slot_file);
             if(romtype != "")
             {
-                localStorage.setItem(romtype, file_slot_file_name);
-                save_rom(file_slot_file_name, romtype, file_slot_file);
-                load_roms(/*false*/ true); // true to load reload an already selected extension, when the rom was just changed
+                setTimeout(async ()=>{
+                    try{
+                        local_storage_set(romtype, file_slot_file_name);
+                        await save_rom(file_slot_file_name, romtype, file_slot_file);
+                        await load_roms(/*false*/ true); // true to load reload an already selected extension, when the rom was just changed
+                    }
+                    catch(e){
+                        console.error(e.message);
+                        fill_rom_icons();
+                        fill_ext_icons();
+                    }
+                });
+
             }
         }
         else
         {
             $("#file_slot_dialog_label").html(" "+file_slot_file_name);
-            //configure file_slot
-
-            var auto_load = false;
-            var auto_press_play = false;
-            var auto_run = false;
-            
+            //configure file_slot  
             $("#button_insert_file").removeAttr("disabled");
             $("#div_zip_content").hide();
             $("#button_eject_zip").hide();
@@ -748,50 +793,8 @@ function configure_file_dialog(reset=false)
 
             var return_icon=`&nbsp;<svg width="1em" height="1em" viewBox="0 0 16 16" class="bi bi-arrow-return-left" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M14.5 1.5a.5.5 0 0 1 .5.5v4.8a2.5 2.5 0 0 1-2.5 2.5H2.707l3.347 3.346a.5.5 0 0 1-.708.708l-4.2-4.2a.5.5 0 0 1 0-.708l4-4a.5.5 0 1 1 .708.708L2.707 8.3H12.5A1.5 1.5 0 0 0 14 6.8V2a.5.5 0 0 1 .5-.5z"/></svg>`;
 
-            if(file_slot_file_name.match(/[.](prg|t64)$/i)) 
+            if(file_slot_file_name.match(/[.](zip)$/i)) 
             {
-                auto_run = true;
-                reset_before_load = true; //when flashing a prg always reset
-            }
-            else if(file_slot_file_name.match(/[.]tap$/i)) 
-            {
-                $("#div_auto_load").show(); auto_load = true;
-                $("#div_auto_press_play").show(); auto_press_play = true;
-                $("#div_auto_run").hide(); auto_run = false;
-                $("#button_insert_file").html("insert tape"+return_icon);
-                $("#modal_file_slot").modal();
-            }
-            else if(file_slot_file_name.match(/[.](d64|g64)$/i)) 
-            {
-                $("#div_auto_load").show();  auto_load = true;
-                $("#div_auto_press_play").hide();
-                $("#div_auto_run").show(); auto_run = true;
-                $("#button_insert_file").html("insert disk"+return_icon);
-                
-                if (/*!JSON.parse(wasm_rom_info()).has_floppy_rom //is 1541.rom loaded ?*/
-                    localStorage.getItem('vc1541_rom.bin')==null)
-                {
-                    $("#no_disk_rom_msg").show();
-                    $("#button_insert_file").attr("disabled", true);
-                }
-                if(call_param_dialog_on_disk == false)
-                {
-                    insert_file();
-                }
-                else
-                {
-                    $("#modal_file_slot").modal();
-                }
-            }
-            else if(file_slot_file_name.match(/[.](crt)$/i)) 
-            {
-            }
-            else if(file_slot_file_name.match(/[.](zip)$/i)) 
-            {
-                $("#div_auto_load").hide();
-                $("#div_auto_press_play").hide();
-                $("#div_auto_run").hide();
-
                 $("#div_zip_content").show();
 
                 $("#button_eject_zip").show();
@@ -854,7 +857,7 @@ function configure_file_dialog(reset=false)
                                 if(mountable_count==1)
                                 {//in case that there was only one mountable file in the zip, auto mount it
                                     configure_file_dialog(false);
-                                }        
+                                }
                                 else
                                 {//file is ready to insert
                                     $("#button_insert_file").html("mount file"+return_icon);
@@ -873,7 +876,7 @@ function configure_file_dialog(reset=false)
                     }
                     else
                     {
-                         $("#drop_zone").html("file slot");
+                        $("#drop_zone").html("file slot");
                         $("#drop_zone").css("border", "");
 
                         last_zip_archive_name = null;
@@ -886,52 +889,132 @@ function configure_file_dialog(reset=false)
                     }
                     if(mountable_count>1)
                     {
-                        $("#modal_file_slot").modal();
+                        (async ()=>{
+                            for(var i=0; i<mountable_count;i++)
+                            {
+                                var path = $("#li_fileselect"+i).text();
+                                if(df_mount_list.includes(path) || hd_mount_list.includes(path))
+                                {
+                                    let drive_number= df_mount_list.indexOf(path);
+                                    if(drive_number<0)
+                                        drive_number=hd_mount_list.indexOf(path);
+                                    file_slot_file_name=path;
+                                    file_slot_file = await zip.file(path).async("uint8array");
+                                    insert_file(drive_number);
+                                } 
+                            }
+                            if(df_mount_list.length == 0 && hd_mount_list.length==0)
+                            {//when there is no auto mount list let the user decide
+                                $("#modal_file_slot").modal();
+                            }
+                            df_mount_list=[];//only do automount once
+                            hd_mount_list=[];
+                        })();
                     }
                 });
 
                 $("#button_insert_file").html("mount file"+return_icon);
                 $("#button_insert_file").attr("disabled", true);
             }
-
-            $("#auto_load").prop('checked', auto_load);
-            $("#auto_press_play").prop('checked', auto_press_play);
-            $("#auto_run").prop('checked', auto_run);    
-
-            if(file_slot_file_name.match(/[.](adf|hdf|dms|exe|vAmiga)$/i))
+            else if(file_slot_file_name.match(/[.](adf|hdf|dms|exe|vAmiga)$/i))
             {
-                insert_file();
+                prompt_for_drive();
             }
         }    
-
     } catch(e) {
         console.log(e);
     }
 }
 
+function prompt_for_drive()
+{
+    let cancel=`<div class="close" style="position:absolute;top:0.2em;right:0.4em;cursor:pointer" onclick="show_drive_select(false)">×</div>`;
 
+    show_drive_select=(show)=>{
+        document.getElementById("div_drive_select").setAttribute('class', `slide-${show?"in":"out"}`);
+        if(show)
+        {
+            $("#div_drive_select").show();
+        }
+        else
+        {
+            setTimeout(()=>$("#div_drive_select").hide(),1000); 
+        }
+    }
 
+    if(file_slot_file_name.match(/[.](adf|dms|exe)$/i))
+    {
+        let df_count=0;
+        for(let i = 0; i<4;i++)
+            df_count+=wasm_get_config_item("DRIVE_CONNECT",i);
 
+        if(df_count==1 || parameter_link_mount_in_df0)
+        {
+            show_drive_select(false);
+            insert_file(0);
+        }
+        else
+        {
+            let drv_html=`${cancel}
+            <div id="drive_select_file" class="gc_choice_text">insert <span class="mx-2 px-2">${file_slot_file_name}</span> into</div>
+            <div id="drive_select_choice">`;
+            for(var dn=0;dn<df_count;dn++)
+            {
+                drv_html+=`<button type="button" class="btn btn-primary m-1 mb-2" style="width:20vw" onclick="insert_file(${dn});show_drive_select(false);">df${dn}:</button>`;
+            }
+            drv_html+=`</div>`;
+            $("#div_drive_select").html(drv_html);
+            show_drive_select(true);
+        }
+    }
+    else if(file_slot_file_name.match(/[.]hdf$/i))
+    {
+        $("#div_drive_select").html(`${cancel}
+        <div id="drive_select_file" class="gc_choice_text">reset amiga and mount <span class="mx-2 px-2">${file_slot_file_name}</span> into</div>
+        <div id="drive_select_choice">
+            <button type="button" class="btn btn-primary m-1 mb-2" style="width:20vw" onclick="insert_file(0);show_drive_select(false);">dh0:</button>
+            <button type="button" class="btn btn-primary m-1 mb-2" style="width:20vw" onclick="insert_file(1);show_drive_select(false);">dh1:</button>
+            <button type="button" class="btn btn-primary m-1 mb-2" style="width:20vw" onclick="insert_file(0);show_drive_select(false);">dh2:</button>
+            <button type="button" class="btn btn-primary m-1 mb-2" style="width:20vw" onclick="insert_file(1);show_drive_select(false);">dh3:</button>
+        </div>`);
+        show_drive_select(true);
+    }
+    else
+    {
+        show_drive_select(false);
+        insert_file(0);
+    }
 
-
-
+}
 
 var port1 = 'none';
 var port2 = 'none';
-joystick_keydown_map = {
+joystick_keydown_map=[];
+joystick_keydown_map[1]={
     'ArrowUp':'PULL_UP',
     'ArrowDown':'PULL_DOWN',
     'ArrowLeft':'PULL_LEFT',
     'ArrowRight':'PULL_RIGHT',
-    'Space':'PRESS_FIRE'
-}
-joystick_keyup_map = {
+    'Space':'PRESS_FIRE',
+} 
+joystick_keydown_map[2]=Object.assign({}, joystick_keydown_map[1]);
+joystick_keydown_map[2].KeyB='PRESS_FIRE2';
+joystick_keydown_map[3]=Object.assign({}, joystick_keydown_map[2]);
+joystick_keydown_map[3].KeyN='PRESS_FIRE3';
+joystick_keyup_map=[]
+joystick_keyup_map[1] = {
     'ArrowUp':'RELEASE_Y',
     'ArrowDown':'RELEASE_Y',
     'ArrowLeft':'RELEASE_X',
     'ArrowRight':'RELEASE_X',
-    'Space':'RELEASE_FIRE'
+    'Space':'RELEASE_FIRE',
 }
+joystick_keyup_map[2]=Object.assign({}, joystick_keyup_map[1]);
+joystick_keyup_map[2].KeyB='RELEASE_FIRE2';
+joystick_keyup_map[3]=Object.assign({}, joystick_keyup_map[2]);
+joystick_keyup_map[3].KeyN='RELEASE_FIRE3';
+
+
 
 
 function is_any_text_input_active()
@@ -981,7 +1064,7 @@ function keydown(e) {
 
     if(port1=='keys'||port2=='keys')
     {
-        var joystick_cmd = joystick_keydown_map[e.code];
+        var joystick_cmd = joystick_keydown_map[joystick_button_count][e.code];
         if(joystick_cmd !== undefined)
         {
             emit_joystick_cmd((port1=='keys'?'1':'2')+joystick_cmd);
@@ -989,14 +1072,14 @@ function keydown(e) {
         }
     }
 
-    var c64code = translateKey2(e.code, e.key);
-    if(c64code !== undefined)
+    var key_code = translateKey2(e.code, e.key);
+    if(key_code !== undefined && key_code.raw_key[0] != undefined)
     {
-        if(c64code.modifier != null)
+        if(key_code.modifier != null)
         {
-            wasm_schedule_key(c64code.modifier[0], c64code.modifier[1], 1, 0);
+            wasm_schedule_key(key_code.modifier[0], key_code.modifier[1], 1, 0);
         }
-        wasm_schedule_key(c64code.raw_key[0], c64code.raw_key[1], 1, 0);
+        wasm_schedule_key(key_code.raw_key[0], key_code.raw_key[1], 1, 0);
     }
 }
 
@@ -1017,21 +1100,32 @@ function keyup(e) {
 
     if(port1=='keys'||port2=='keys')
     {
-        var joystick_cmd = joystick_keyup_map[e.code];
+        var joystick_cmd = joystick_keyup_map[joystick_button_count][e.code];
         if(joystick_cmd !== undefined)
         {
-            emit_joystick_cmd((port1=='keys'?'1':'2')+joystick_cmd);
+            let port_id=port1=='keys'?'1':'2';
+            if(joystick_cmd.startsWith('RELEASE_FIRE')
+                ||
+                //only release axis on key_up if the last key_down for that axis was the same direction
+                //see issue #737
+                port_state[port_id+'x'] == joystick_keydown_map[joystick_button_count][e.code]
+                ||
+                port_state[port_id+'y'] == joystick_keydown_map[joystick_button_count][e.code]
+            )
+            {
+                emit_joystick_cmd(port_id+joystick_cmd);
+            }
             return;
         }
     }
 
-    var c64code = translateKey2(e.code, e.key);
-    if(c64code !== undefined )
+    var key_code = translateKey2(e.code, e.key);
+    if(key_code !== undefined && key_code.raw_key[0] != undefined)
     {
-        wasm_schedule_key(c64code.raw_key[0], c64code.raw_key[1], 0, 1);
-        if(c64code.modifier != null )
+        wasm_schedule_key(key_code.raw_key[0], key_code.raw_key[1], 0, 1);
+        if(key_code.modifier != null )
         {
-            wasm_schedule_key(c64code.modifier[0], c64code.modifier[1], 0, 1);
+            wasm_schedule_key(key_code.modifier[0], key_code.modifier[1], 0, 1);
         }
     }
 }
@@ -1119,14 +1213,21 @@ function handle_touch(portnr)
         {
             new_touch_cmd_y ="RELEASE_Y";
         }
-        var new_fire = (v_fire._pressed?"PRESS_FIRE":"RELEASE_FIRE");
-        var new_touch_cmd = portnr + new_touch_cmd_x + new_touch_cmd_y + new_fire;
+
+        let fire_button_number=Math.round(v_fire._stickY/(window.innerHeight/(joystick_button_count-1)))+1;
+        var new_fire   = 1==fire_button_number&&v_fire._pressed?"PRESS_FIRE":"RELEASE_FIRE";
+        var new_fire_2 = 2==fire_button_number&&v_fire._pressed?"PRESS_FIRE2":"RELEASE_FIRE2";
+        var new_fire_3 = 3==fire_button_number&&v_fire._pressed?"PRESS_FIRE3":"RELEASE_FIRE3";
+        
+        var new_touch_cmd = portnr + new_touch_cmd_x + new_touch_cmd_y + new_fire + new_fire_2 + new_fire_3;
         if( last_touch_cmd != new_touch_cmd)
         {
             last_touch_cmd = new_touch_cmd;
             emit_joystick_cmd(portnr+new_touch_cmd_x);
             emit_joystick_cmd(portnr+new_touch_cmd_y);
             emit_joystick_cmd(portnr+new_fire);
+            emit_joystick_cmd(portnr+new_fire_2);
+            emit_joystick_cmd(portnr+new_fire_3);
         }
     } catch (error) {
         console.error("error while handle_touch: "+ error);        
@@ -1229,17 +1330,34 @@ function handleGamePad(portnr, gamepad)
         emit_joystick_cmd(portnr+"RELEASE_Y");
     }
 
-
-    var bFirePressed=false;
-    for(var i=0; i<gamepad.buttons.length && i<12;i++)
+    if(joystick_button_count==1)
     {
-        if(gamepad.buttons[i].pressed)
+        var bFirePressed=false;
+        for(var i=0; i<gamepad.buttons.length && i<12;i++)
         {
-            bFirePressed=true;
+            if(gamepad.buttons[i].pressed)
+            {
+                bFirePressed=true;
+            }
         }
+        emit_joystick_cmd(portnr + (bFirePressed?"PRESS_FIRE":"RELEASE_FIRE"));
+    }
+    else if(joystick_button_count>1)
+    {
+        var bFirePressed=[false,false,false];
+
+        for(var i=0; i<gamepad.buttons.length && i<12;i++)
+        {
+            if(gamepad.buttons[i].pressed)
+            {
+                bFirePressed[i%joystick_button_count]=true;
+            }
+        }
+        emit_joystick_cmd(portnr + (bFirePressed[0]?"PRESS_FIRE":"RELEASE_FIRE"));
+        emit_joystick_cmd(portnr + (bFirePressed[1]?"PRESS_FIRE2":"RELEASE_FIRE2"));
+        emit_joystick_cmd(portnr + (bFirePressed[2]?"PRESS_FIRE3":"RELEASE_FIRE3"));
     }
 
-    emit_joystick_cmd(portnr + (bFirePressed?"PRESS_FIRE":"RELEASE_FIRE"));
 }
 
 var port_state={};
@@ -1284,6 +1402,22 @@ function emit_joystick_cmd(command)
     else if(cmd=="RELEASE_FIRE")
     {
         port_state[port+'fire']= cmd;
+    }
+    else if(cmd=="PRESS_FIRE2")
+    {
+        port_state[port+'fire2']= cmd;
+    }
+    else if(cmd=="RELEASE_FIRE2")
+    {
+        port_state[port+'fire2']= cmd;
+    }
+    else if(cmd=="PRESS_FIRE3")
+    {
+        port_state[port+'fire3']= cmd;
+    }
+    else if(cmd=="RELEASE_FIRE3")
+    {
+        port_state[port+'fire3']= cmd;
     }
 
     send_joystick(PORT_ACCESSOR.MANUAL, port, command);
@@ -1341,12 +1475,10 @@ function restore_manual_state(port)
 
 
 function InitWrappers() {
-
-    //wasm_loadfile = Module.cwrap('wasm_loadFile', 'string', ['string', 'array', 'number']);
-    wasm_loadfile = function (file_name, file_buffer) {
+    wasm_loadfile = function (file_name, file_buffer, drv_number=0) {
         var file_slot_wasmbuf = Module._malloc(file_buffer.byteLength);
         Module.HEAPU8.set(file_buffer, file_slot_wasmbuf);
-        var retVal=Module.ccall('wasm_loadFile', 'string', ['string','number','number'], [file_name,file_slot_wasmbuf,file_buffer.byteLength]);
+        var retVal=Module.ccall('wasm_loadFile', 'string', ['string','number','number', 'number'], [file_name,file_slot_wasmbuf,file_buffer.byteLength, drv_number]);
         Module._free(file_slot_wasmbuf);
         return retVal;                    
     }
@@ -1365,71 +1497,53 @@ function InitWrappers() {
 
     do_animation_frame=null;
     queued_executes=0;
-    ctx=null;
-
-
-
-    document.getElementById("canvas").height=VPIXELS-yOff;
-    document.getElementById("canvas").width=clipped_width-0x12*4-4;
-  
-    clipped_height=(3*clipped_width/4 /*+(ntsc?0:32)*/ /*32 due to PAL?*/) & 0xfffe;
-
-    canvas.addEventListener('touchmove',function(e){e.preventDefault()},false);
+    
     wasm_run = function () {
-        Module._wasm_run();         
+        Module._wasm_run();       
         if(do_animation_frame == null)
         {
             execute_amiga_frame=()=>{
                 Module._wasm_execute(); 
                 queued_executes--;
             };
+
+            render_frame= (now)=>{
+                if(current_renderer=="gpu shader")
+                    render_canvas_gl(now);
+                else
+                    render_canvas(now);
+            }
+            if(Module._wasm_is_worker_built()){
+                calculate_and_render=(now)=>
+                {
+                    draw_one_frame(); // to gather joystick information 
+                    render_frame(now);
+                    Module._wasm_worker_run();
+                }
+            }
+            else
+            {
+                calculate_and_render=(now)=>
+                {
+                    draw_one_frame(); // to gather joystick information 
+                    let behind = Module._wasm_draw_one_frame(now);
+                    render_frame(now);
+                    while(behind>queued_executes)
+                    {
+                        queued_executes++;
+                        setTimeout(execute_amiga_frame);
+                    }
+                }
+            }
+
             do_animation_frame = function(now) {
-                draw_one_frame(); //gather joystick information before executing frame                
-                //let behind = Module._wasm_draw_one_frame(now);
-                let pixels = Module._wasm_pixel_buffer();
-                
-                if(ctx == null)
-                {
-                    const canvas = document.getElementById('canvas');
-                    ctx = canvas.getContext('2d');
-                    image_data=ctx.createImageData(clipped_width,clipped_height/*VPIXELS+PAL_EXTRA_VPIXELS-yOff*/);
-                    pixel_buffer=new Uint8Array(Module.HEAPU32.buffer, pixels+HBLANK_MIN+yOff*HPIXELS*4+xOff*4, (clipped_width-HBLANK_MIN)*(VPIXELS-yOff+PAL_EXTRA_VPIXELS)*4);
-                }
-                //let pixel_data = new Uint8Array(pixel_buffer, xOff+HBLANK_MIN/* offset  */, (clipped_width-HBLANK_MIN)*clipped_height*4);
-                //data.set(snapshot_data.subarray(0, data.length), 0);
-                image_data.data.set(pixel_buffer, 0);
-                ctx.putImageData(image_data,0,0); 
-
-
-                 /*   Uint8 *texture = (Uint8 *)(stable_ptr)+clip_offset*4;
-
-                    //  SDL_RenderClear(renderer);
-                      SDL_Rect SrcR;
-                  
-                      SrcR.x = (xOff-HBLANK_MIN*4) *TPP;
-                      SrcR.y = yOff;
-                      SrcR.w = clipped_width * TPP;
-                      SrcR.h = clipped_height;
-                  
-                      SDL_UpdateTexture(screen_texture, &SrcR, texture+ (4*HPIXELS*TPP*SrcR.y) + SrcR.x*4, 4*HPIXELS*TPP);
-                  
-                      SDL_RenderCopy(renderer, screen_texture, &SrcR, NULL);
-                  */
-/*
-                while(behind>queued_executes)
-                {
-                    queued_executes++;
-                    setTimeout(execute_amiga_frame);
-                }
-*/
-                Module._wasm_worker_run();
+                calculate_and_render(now);
 
                 // request another animation frame
                 if(!stop_request_animation_frame)
                 {
                     requestAnimationFrame(do_animation_frame);   
                 }
-
             }
         }  
         if(stop_request_animation_frame)
@@ -1490,7 +1604,12 @@ function InitWrappers() {
         }
         audio_connected=true;
         wasm_set_sample_rate(audioContext.sampleRate);
-        console.log("try connecting audioprocessor");           
+        console.log("try connecting audioprocessor...");
+        if(audioContext.audioWorklet==undefined)
+        {
+            console.error("audioContext.audioWorklet == undefined");
+            return;
+        }
         await audioContext.audioWorklet.addModule('js/vAmiga_audioprocessor.js');
         worklet_node = new AudioWorkletNode(audioContext, 'vAmiga_audioprocessor', {
             outputChannelCount: [2],
@@ -1509,12 +1628,7 @@ function InitWrappers() {
             }
         }
         init_sound_buffer();
-/*        samples_consumed=0;
-        setInterval(() => {
-            console.log("ap_samples_req: "+samples_consumed/30);
-            samples_consumed=0;
-        }, 30*1000);
-*/      
+
         empty_shuttles=new RingBuffer(16);
         worklet_node.port.onmessage = (msg) => {
             //direct c function calls with preceeding Module._ are faster than cwrap
@@ -1560,19 +1674,41 @@ function InitWrappers() {
         worklet_node.connect(audioContext.destination);        
     }
 
-    click_unlock_WebAudio=async function() {
-        await connect_audio_processor();
-        if(audioContext.state === 'running') {
+
+    //when app is going to background
+    //window.addEventListener('blur', pause);
+
+    //when app is coming to foreground again, reconnect audio if it has been 'suspended' in the meantime
+    window.addEventListener('focus', async ()=>{ 
+        try { await connect_audio_processor(); } catch(e){ console.error(e);}
+    });
+    
+    audioContext.onstatechange = () => {
+        let state = audioContext.state;
+        console.error(`audioContext.state=${state}`);
+        if(state==='suspended'){
+            //in case we did go suspended reinstall the unlock events
             document.removeEventListener('click',click_unlock_WebAudio);
+            document.addEventListener('click',click_unlock_WebAudio, false);
+
+            //iOS safari does not bubble click events on canvas so we add this extra event handler here
+            let canvas=document.getElementById('canvas');
+            canvas.removeEventListener('touchstart',touch_unlock_WebAudio);
+            canvas.addEventListener('touchstart',touch_unlock_WebAudio,false);        
         }
-    }
-    touch_unlock_WebAudio=async function() {
-        await connect_audio_processor();
-        if(audioContext.state === 'running') {
+        else if(state === 'running') {
+            //if it runs we dont need the unlock handlers, has no effect when handler already removed 
+            document.removeEventListener('click',click_unlock_WebAudio);
             document.getElementById('canvas').removeEventListener('touchstart',touch_unlock_WebAudio);
         }
     }
 
+    click_unlock_WebAudio=async function() {
+        try { await connect_audio_processor(); } catch(e){ console.error(e);}
+    }
+    touch_unlock_WebAudio=async function() {
+        try { await connect_audio_processor(); } catch(e){ console.error(e);}
+    }    
     document.addEventListener('click',click_unlock_WebAudio, false);
 
     //iOS safari does not bubble click events on canvas so we add this extra event handler here
@@ -1646,44 +1782,30 @@ function InitWrappers() {
         }
         else if(event.data.cmd == "load")
         {
-            function copy_to_local_storage(romtype, byteArray)
+            async function copy_to_local_storage(romtype, byteArray)
             {
                 if(romtype != "")
                 {
-                    localStorage.setItem(romtype+".bin", ToBase64(byteArray));
-                    save_rom(romtype+".bin", romtype,  byteArray);                    
-                    load_roms(false);
+                    try{
+                        local_storage_set(romtype+".bin", ToBase64(byteArray));
+                        await save_rom(romtype+".bin", romtype,  byteArray);                    
+                        await load_roms(false);
+                    }
+                    catch(e){
+                        console.error(e.message)
+                        fill_rom_icons();
+                        fill_ext_icons();
+                    }
                 }
             }
 
             let with_reset=false;
             //check if any roms should be preloaded first... 
-            if(event.data.floppy_rom !== undefined)
+            if(event.data.kickstart_rom !== undefined)
             {
-                let byteArray = event.data.floppy_rom;
-                let rom_type=wasm_loadfile("1541.rom", byteArray);
-                copy_to_local_storage(rom_type, byteArray);
-                with_reset=true;
-            }
-            if(event.data.basic_rom !== undefined)
-            {
-                let byteArray = event.data.basic_rom;
-                let rom_type=wasm_loadfile("basic.rom", byteArray);
-                copy_to_local_storage(rom_type, byteArray);
-                with_reset=true;
-            }
-            if(event.data.kernal_rom !== undefined)
-            {
-                let byteArray = event.data.kernal_rom;
-                let rom_type=wasm_loadfile("kernal.rom", byteArray);
-                copy_to_local_storage(rom_type, byteArray);
-                with_reset=true;
-            }
-            if(event.data.charset_rom !== undefined)
-            {
-                let byteArray = event.data.charset_rom;
-                let rom_type=wasm_loadfile("charset.rom", byteArray);
-                copy_to_local_storage(rom_type, byteArray);
+                let byteArray = event.data.kickstart_rom;
+                let rom_type=wasm_loadfile("kick.rom_file", byteArray);
+                //copy_to_local_storage(rom_type, byteArray);
                 with_reset=true;
             }
             if(with_reset){
@@ -1984,6 +2106,27 @@ function InitWrappers() {
         install_custom_keys();
         save_setting('lock_action_button', lock_action_button);
     });
+//----
+let set_game_controller_buttons_choice = function (choice) {
+    $(`#button_game_controller_type_choice`).text('button count='+choice);
+    joystick_button_count=choice;
+    save_setting("game_controller_buttons",choice);   
+
+    for(el of document.querySelectorAll(".gc_choice_text"))
+    {
+        el.style.display="none";
+    }
+    document.getElementById('gc_buttons_'+choice).style.display="inherit";
+}
+joystick_button_count=load_setting("game_controller_buttons", 1);
+set_game_controller_buttons_choice(joystick_button_count);
+
+$(`#choose_game_controller_type a`).click(function () 
+{
+    let choice=$(this).text();
+    set_game_controller_buttons_choice(choice);
+    $("#modal_settings").focus();
+});
 
 //----
     let set_vbk_choice = function (choice) {
@@ -2008,11 +2151,11 @@ function InitWrappers() {
     });
 
 //----
-    let set_renderer_choice = function (choice) {
+    set_renderer_choice = function (choice) {
         $(`#button_renderer`).text('video renderer='+choice);
         save_setting("renderer",choice);
     }
-    let current_renderer=load_setting("renderer", "software");
+    current_renderer=load_setting("renderer", "software");
     set_renderer_choice(current_renderer);
 
     $(`#choose_renderer a`).click(function () 
@@ -2022,15 +2165,30 @@ function InitWrappers() {
         $("#modal_settings").focus();
     });
 
+    if(call_param_gpu==true)
+    {
+        current_renderer="gpu shader";
+    }
     let got_renderer=false;
-    try{ 
-        got_renderer=wasm_create_renderer(current_renderer); 
-    } catch {}
+    if(current_renderer=="gpu shader")
+    {
+        try{
+            initWebGL();
+            got_renderer=true;
+        }
+        catch(e){}
+    }
+    else
+    {
+        create2d_context();
+    }
+    //got_renderer=wasm_create_renderer(current_renderer); 
     if(!got_renderer && current_renderer!='software')
     {
         alert('MESSAGE: gpu shader can not be created on your system configuration... switching back to software renderer...');
-        wasm_create_renderer('software');
         set_renderer_choice('software')
+        current_renderer='software';
+        create2d_context();
     }
 
 
@@ -2127,7 +2285,7 @@ function validate_hardware()
 
 validate_hardware();
 
-function bind_config_choice(key, name, values, default_value, value2text=null, text2value=null, targetElement=null){
+function bind_config_choice(key, name, values, default_value, value2text=null, text2value=null, targetElement=null, updated_func=null){
     value2text = value2text == null ? (t)=>t: value2text;
     text2value = text2value == null ? (t)=>t: text2value;
     
@@ -2164,6 +2322,8 @@ function bind_config_choice(key, name, values, default_value, value2text=null, t
             wasm_power_on(1);
             return;
         }
+        if(updated_func!=null)
+            updated_func(choice);
     }
     set_choice(value2text(load_setting(key, default_value)));
 
@@ -2177,9 +2337,23 @@ function bind_config_choice(key, name, values, default_value, value2text=null, t
 
 
 bind_config_choice("OPT_BLITTER_ACCURACY", "blitter accuracy",['0','1','2'],'2');
-bind_config_choice("OPT_DRIVE_SPEED", "drive speed",['-1', '1', '2', '4', '8'],'1');
 
+show_drive_config = (c)=>{
+    $('#div_drives').html(`
+    ${wasm_get_config_item("DRIVE_CONNECT",0)==1?"<span>df0</span>":""} 
+    ${wasm_get_config_item("DRIVE_CONNECT",1)==1?"<span>df1</span>":""} 
+    ${wasm_get_config_item("DRIVE_CONNECT",2)==1?"<span>df2</span>":""} 
+    ${wasm_get_config_item("DRIVE_CONNECT",3)==1?"<span>df3</span>":""}
+    <br>(kickstart needs a reset to recognize new connected drives)
+    `);
+}
 
+bind_config_choice("OPT_floppy_drive_count", "floppy drives",['1', '2', '3', '4'],'2',
+null,null,null,show_drive_config);
+$('#hardware_settings').append(`<div id="div_drives"style="font-size: smaller" class="ml-3 vbk_choice_text"></div>`);
+show_drive_config();
+
+bind_config_choice("OPT_DRIVE_SPEED", "floppy drive speed",['-1', '1', '2', '4', '8'],'1');
 
 $('#hardware_settings').append(`<div class="mt-4">hardware settings</div><span style="font-size: smaller;">(shuts machine down on agnus model or memory change)</span>`);
 
@@ -2190,7 +2364,7 @@ bind_config_choice("OPT_SLOW_RAM", "slow ram",['0', '256', '512'],'0', (v)=>`${v
 bind_config_choice("OPT_FAST_RAM", "fast ram",['0', '256', '512','1024', '2048', '8192'],'2048', (v)=>`${v} KB`, t=>parseInt(t));
 
 $('#hardware_settings').append("<div id='divCPU' style='display:flex;flex-direction:row'></div>");
-bind_config_choice("OPT_CPU_REVISION", "CPU",[0,1,2,3], 0, 
+bind_config_choice("OPT_CPU_REVISION", "CPU",[0,1,2], 0, 
 (v)=>{ return (68000+v*10)},
 (t)=>{
     let val = t;
@@ -2274,7 +2448,7 @@ $('.layer').change( function(event) {
 });
 
 //------
-    load_console=function () { var script = document.createElement('script'); script.src="js/eruda.js"; document.body.appendChild(script); script.onload = function () { eruda.init(
+    load_console=function () { var script = document.createElement('script'); script.src="//cdn.jsdelivr.net/npm/eruda@2.4.1"; document.body.appendChild(script); script.onload = function () { eruda.init(
     {
         defaults: {
             displaySize: 50,
@@ -2368,6 +2542,7 @@ $('.layer').change( function(event) {
 
     $('#modal_file_slot').on('hidden.bs.modal', function () {
         $("#filedialog").val(''); //clear file slot after file has been loaded
+        document.getElementById('modal_file_slot').blur(); //needed for safari issue#136
     });
 
     $( "#modal_file_slot" ).keydown(event => {
@@ -2380,18 +2555,12 @@ $('.layer').change( function(event) {
     );
 
     reset_before_load=false;
-    insert_file = function() 
+    insert_file = function(drive=0) 
     {   
-        if($('#div_zip_content').is(':visible'))
-        {
-            configure_file_dialog(reset_before_load);
-            return;
-        }
-        
         $('#modal_file_slot').modal('hide');
 
-        var execute_load = async function(){
-            var filetype = wasm_loadfile(file_slot_file_name, file_slot_file);
+        var execute_load = async function(drive){
+            var filetype = wasm_loadfile(file_slot_file_name, file_slot_file, drive);
 
             //if it is a disk from a multi disk zip file, apptitle should be the name of the zip file only
             //instead of disk1, disk2, etc....
@@ -2427,12 +2596,12 @@ $('.layer').change( function(event) {
 
         if(reset_before_load == false)
         {
-            execute_load();
+            execute_load(drive);
         }
         else
         {
             setTimeout(async ()=> {
-                await execute_load();
+                await execute_load(drive);
                 wasm_reset();
                 if(call_param_warpto !=null){
                     wasm_configure("warp_to_frame", `${call_param_warpto}`);
@@ -2440,7 +2609,9 @@ $('.layer').change( function(event) {
             },0);
         }
     }
-    $("#button_insert_file").click(insert_file);
+    $("#button_insert_file").click(()=>{
+         prompt_for_drive();
+    });
     
     $('#modal_take_snapshot').on('hidden.bs.modal', function () {
         if(is_running())
@@ -2457,24 +2628,37 @@ $('.layer').change( function(event) {
     );
    
 
-    $('#modal_settings').on('shown.bs.modal', function() 
-    {       
-        if(wasm_has_disk("df0"))
+    $('#modal_settings').on('show.bs.modal', function() 
+    {    
+        for(var dn=0; dn<4; dn++)
         {
-            $("#button_eject_disk").show();
-        }
-        else
-        {
-            $("#button_eject_disk").hide();
-        }
-        if(wasm_has_disk("dh0"))
-        {
-            $("#button_eject_hdf").show();
-        }
-        else
-        {
-            $("#button_eject_hdf").hide();
-        }
+            if(wasm_has_disk("df"+dn))
+            {
+                $("#button_eject_df"+dn).show();
+            }
+            else
+            {
+                $("#button_eject_df"+dn).hide();
+            }
+            $('#button_eject_df'+dn).click(function() 
+            {
+                wasm_eject_disk("df"+this.id.at(-1));
+                $("#button_eject_df"+this.id.at(-1)).hide();
+            });
+            if(wasm_has_disk("dh"+dn))
+            {
+                $("#button_eject_hd"+dn).show();
+            }
+            else
+            {
+                $("#button_eject_hd"+dn).hide();
+            }
+            $('#button_eject_hd'+dn).click(function() 
+            {
+                wasm_eject_disk("dh"+this.id.at(-1));
+                $("#button_eject_hd"+this.id.at(-1)).hide();
+            });
+        }   
     });
 
     document.getElementById('button_take_snapshot').onclick = function() 
@@ -2484,82 +2668,75 @@ $('.layer').change( function(event) {
         $("#input_app_title").val(global_apptitle);
         $("#input_app_title").focus();
 
-        if(wasm_has_disk("df0"))
+        for(var dfn=0; dfn<4; dfn++)
         {
-            $("#button_export_disk").show();
-        }
-        else
-        {
-            $("#button_export_disk").hide();
-        }
-        if(wasm_has_disk("dh0"))
-        {
-            $("#button_export_hdf").show();
-        }
-        else
-        {
-            $("#button_export_hdf").hide();
+            if(wasm_has_disk("df"+dfn))
+            {
+                $("#button_export_df"+dfn).show();
+            }
+            else
+            {
+                $("#button_export_df"+dfn).hide();
+            }
+            if(wasm_has_disk("dh"+dfn))
+            {
+                $("#button_export_hd"+dfn).show();
+            }
+            else
+            {
+                $("#button_export_hd"+dfn).hide();
+            }
         }
     }
-    $("#button_eject_disk").hide();
-    $('#button_eject_disk').click(function() 
+    for(var dn=0; dn<4; dn++)
     {
-        wasm_eject_disk("df0");
-        $("#button_eject_disk").hide();
-    });
-    $("#button_eject_hdf").hide();
-    $('#button_eject_hdf').click(function() 
-    {
-        wasm_eject_disk("dh0");
-        $("#button_eject_hdf").hide();
-    });
-    $('#button_export_disk').click(function() 
-    {
-        let d64_json = wasm_export_disk("df0");
-        let d64_obj = JSON.parse(d64_json);
-        let d64_buffer = new Uint8Array(Module.HEAPU8.buffer, d64_obj.address, d64_obj.size);
-        let filebuffer = d64_buffer.slice(0,d64_obj.size);
-        let blob_data = new Blob([filebuffer], {type: 'application/octet-binary'});
-        const url = window.URL.createObjectURL(blob_data);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-
-        let app_name = $("#input_app_title").val();
-        let extension_pos = app_name.indexOf(".");
-        if(extension_pos >=0)
+        $('#button_export_df'+dn).click(function() 
         {
-            app_name = app_name.substring(0,extension_pos);
-        }
-        a.download = app_name+'.adf';
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-    });
-    $('#button_export_hdf').click(function() 
-    {
-        let d64_json = wasm_export_disk("dh0");
-        let d64_obj = JSON.parse(d64_json);
-        let d64_buffer = new Uint8Array(Module.HEAPU8.buffer, d64_obj.address, d64_obj.size);
-        let filebuffer = d64_buffer.slice(0,d64_obj.size);
-        let blob_data = new Blob([filebuffer], {type: 'application/octet-binary'});
-        const url = window.URL.createObjectURL(blob_data);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
+            let d64_json = wasm_export_disk("df"+this.id.at(-1));
+            let d64_obj = JSON.parse(d64_json);
+            let d64_buffer = new Uint8Array(Module.HEAPU8.buffer, d64_obj.address, d64_obj.size);
+            let filebuffer = d64_buffer.slice(0,d64_obj.size);
+            let blob_data = new Blob([filebuffer], {type: 'application/octet-binary'});
+            const url = window.URL.createObjectURL(blob_data);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
 
-        let app_name = $("#input_app_title").val();
-        let extension_pos = app_name.indexOf(".");
-        if(extension_pos >=0)
+            let app_name = $("#input_app_title").val();
+            let extension_pos = app_name.indexOf(".");
+            if(extension_pos >=0)
+            {
+                app_name = app_name.substring(0,extension_pos);
+            }
+            a.download = app_name+'.adf';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+        });
+        $('#button_export_hd'+dn).click(function() 
         {
-            app_name = app_name.substring(0,extension_pos);
-        }
-        a.download = app_name+'.hdf';
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-    });
+            let d64_json = wasm_export_disk("dh"+this.id.at(-1));
+            let d64_obj = JSON.parse(d64_json);
+            let d64_buffer = new Uint8Array(Module.HEAPU8.buffer, d64_obj.address, d64_obj.size);
+            let filebuffer = d64_buffer.slice(0,d64_obj.size);
+            let blob_data = new Blob([filebuffer], {type: 'application/octet-binary'});
+            const url = window.URL.createObjectURL(blob_data);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
 
+            let app_name = $("#input_app_title").val();
+            let extension_pos = app_name.indexOf(".");
+            if(extension_pos >=0)
+            {
+                app_name = app_name.substring(0,extension_pos);
+            }
+            a.download = app_name+'.hdf';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+        });
+    }
     $('#button_save_snapshot').click(async function() 
     {       
         let app_name = $("#input_app_title").val();
@@ -2625,11 +2802,17 @@ $('.layer').change( function(event) {
     }
     get_settings_cache_value= async function (key)
     {
-        let settings = await caches.open('settings');
-        let response=await settings.match(key)
-        if(response==undefined)
-            return null;
-        return await response.text();
+        try {
+            let settings = await caches.open('settings');
+            let response=await settings.match(key)
+            if(response==undefined)
+                return null;
+            return await response.text();    
+        }
+        catch(e){
+            console.error(e);
+            return "can't read version";
+        }
     }
 
     execute_update = async function() 
@@ -2674,183 +2857,195 @@ $('.layer').change( function(event) {
             current_ui=current_version.split('@')[1];
         }
     }
-    //when the serviceworker talks with us ...  
-    navigator.serviceWorker.addEventListener("message", async (evt) => {
-        await get_current_ui_version();
-        let cache_names=await caches.keys();
-        let version_selector = `
-        manage already installed versions:
-        <br>
-        <div style="display:flex">
-        <select id="version_selector" class="ml-2" style="background-color:var(--darkbg);color:var(--light);border-radius:6px;border-width:2px;border-color:var(--light);">`;
-        for(c_name of cache_names)
-        {
-            let name_parts=c_name.split('@');
-            let core_name= name_parts[0];
-            let ui_name= name_parts[1];
-            let selected=c_name==current_version?"selected":"";
-
-            if(c_name.includes('@'))
-            {   
-                if(//uat version should not show regular versions and vice versa
-                    location.pathname.startsWith("/uat") ?
-                        ui_name.endsWith("uat")
-                    :
-                        !ui_name.endsWith("uat")
-                )
-                {
-                    version_selector+=`<option ${selected} value="${c_name}">core ${core_name}, ui ${ui_name}</option>`;
-                }
+    try{
+        //when the serviceworker talks with us ...  
+        navigator.serviceWorker.addEventListener("message", async (evt) => {
+            await get_current_ui_version();
+            let cache_names=null;
+            try{
+                cache_names=await caches.keys();
             }
-        }
-        version_selector+=
-        `</select>
-        
-        <button type="button" id="activate_version" disabled class="btn btn-primary btn-sm px-1 mx-1">activate</button>
-        <button type="button" id="remove_version" class="btn btn-danger btn-sm px-1 mx-1"><svg style="width:1.5em;height:1.5em"><use xlink:href="img/sprites.svg#trash"/></svg>
-        </button>
-        </div>
-        `;
-
-        //2. diese vergleichen mit der des Service workers
-        sw_version=evt.data;
-        if(sw_version.cache_name != current_version)
-        {
-            let new_version_already_installed=await has_installed_version(sw_version.cache_name);
-            let new_version_installed_or_not = new_version_already_installed ?
-            `newest version (already installed)`:
-            `new version available`;
-
-            let activate_or_install = `
-            <button type="button" id="activate_or_install" class="btn btn-${new_version_already_installed ?"primary":"success"} btn-sm px-1 mx-1">${
-                new_version_already_installed ? "activate": "install"
-            }</button>`;
-
-
-
-            let upgrade_info = `    
-            currently active version (old):<br>
-            <div style="display:flex">
-            <span class="ml-2 px-1 py-1 outlined">core <i>${wasm_get_core_version()}</i></span> <span class="ml-2 px-1 py-1 outlined">ui <i>${current_ui}</i></span>
-            </div><br>
-            <span id="new_version_installed_or_not">${new_version_installed_or_not}</span>:<br> 
-            <div style="display:flex">
-            <span class="ml-2 px-1 py-1 outlined">core <i>${sw_version.core}</i></span> <span class="ml-2 px-1 py-1 outlined">ui <i>${sw_version.ui}</i></span> ${activate_or_install}
-            </div>
-            <div id="install_warning" class="my-1">Did you know that upgrading the core may break your saved snapshots?<br/>
-            In that case you can still select and activate an older compatible installation to run it ...
-            </div>`;
-
-            $('#update_dialog').html(upgrade_info);
-            $('#activate_or_install').remove();
-            $('#install_warning').remove();
-            $('#version_display').html(`${upgrade_info} 
+            catch(e)
+            {
+                console.error(e);
+                return;
+            }
+            let version_selector = `
+            manage already installed versions:
             <br>
-            ${version_selector}`);
-            if(!new_version_already_installed)
-            {
-                show_new_version_toast();
-            }
-        }
-        else
-        {
-            $("#version_display").html(`
-            currently active version (newest):<br>
             <div style="display:flex">
-            <span class="ml-2 px-1 py-1 outlined">core <i>${wasm_get_core_version()}</i></span> <span class="ml-2 px-1 py-1 outlined">ui <i>${current_ui}</i></span>
-            <button type="button" id="activate_or_install" class="btn btn-success btn-sm px-1 py-1">
-            install</button>
-            </div>
-            <br>
-            ${version_selector}`
-            );
-            $("#activate_or_install").hide();
-        }
-        document.getElementById('version_selector').onchange = function() {
-            let select = document.getElementById('version_selector');
-            document.getElementById('activate_version').disabled=
-                (select.options[select.selectedIndex].value == current_version);
-        }
-        document.getElementById('remove_version').onclick = function() {
-            let select = document.getElementById('version_selector');
-            let cache_name = select.value;
-            if(cache_name == sw_version.cache_name)
+            <select id="version_selector" class="ml-2">`;
+            for(c_name of cache_names)
             {
-                $("#new_version_installed_or_not").text("new version available");
-                $("#activate_or_install").text("install").attr("class","btn btn-success btn-sm px-1 mx-1").show();
-            }
-            caches.delete(cache_name);
-            select.options[select.selectedIndex].remove();
-            if(current_version == cache_name)
-            {//when removing the current active version, activate another installed version
-                if(select.options.length>0)
-                {
-                    select.selectedIndex=select.options.length-1;
-                    set_settings_cache_value("active_version",select.options[select.selectedIndex].value); 
-                }
-                else
-                {
-                    set_settings_cache_value("active_version",sw_version.cache_name); 
-                }   
-            }
-            if(select.options.length==0)
-            {
-                document.getElementById('remove_version').disabled=true;        
-                document.getElementById('activate_version').disabled=true;
-            }
-            else 
-            {
-                document.getElementById('activate_version').disabled=
-                (select.options[select.selectedIndex].value == current_version);
-            }
-        }
-        document.getElementById('activate_version').onclick = function() {
-            let cache_name = document.getElementById('version_selector').value; 
-            set_settings_cache_value("active_version",cache_name);
-            window.location.reload();
-        }
-        let activate_or_install_btn = document.getElementById('activate_or_install');
-        if(activate_or_install_btn != null)
-        {
-            activate_or_install_btn.onclick = () => {
-                (async ()=>{
-                    let new_version_already_installed=await has_installed_version(sw_version.cache_name); 
-                    if(new_version_already_installed)
+                let name_parts=c_name.split('@');
+                let core_name= name_parts[0];
+                let ui_name= name_parts[1];
+                let selected=c_name==current_version?"selected":"";
+
+                if(c_name.includes('@'))
+                {   
+                    if(//uat version should not show regular versions and vice versa
+                        location.pathname.startsWith("/uat") ?
+                            ui_name.endsWith("uat")
+                        :
+                            !ui_name.endsWith("uat")
+                    )
                     {
-                        set_settings_cache_value("active_version",sw_version.cache_name);
-                        window.location.reload();
+                        version_selector+=`<option ${selected} value="${c_name}">core ${core_name}, ui ${ui_name}</option>`;
+                    }
+                }
+            }
+            version_selector+=
+            `</select>
+            
+            <button type="button" id="activate_version" disabled class="btn btn-primary btn-sm px-1 mx-1">activate</button>
+            <button type="button" id="remove_version" class="btn btn-danger btn-sm px-1 mx-1"><svg style="width:1.5em;height:1.5em"><use xlink:href="img/sprites.svg#trash"/></svg>
+            </button>
+            </div>
+            `;
+
+            //2. diese vergleichen mit der des Service workers
+            sw_version=evt.data;
+            if(sw_version.cache_name != current_version)
+            {
+                let new_version_already_installed=await has_installed_version(sw_version.cache_name);
+                let new_version_installed_or_not = new_version_already_installed ?
+                `newest version (already installed)`:
+                `new version available`;
+
+                let activate_or_install = `
+                <button type="button" id="activate_or_install" class="btn btn-${new_version_already_installed ?"primary":"success"} btn-sm px-1 mx-1">${
+                    new_version_already_installed ? "activate": "install"
+                }</button>`;
+
+
+
+                let upgrade_info = `    
+                currently active version (old):<br>
+                <div style="display:flex">
+                <span class="ml-2 px-1 py-1 outlined">core <i>${wasm_get_core_version()}</i></span> <span class="ml-2 px-1 py-1 outlined">ui <i>${current_ui}</i></span>
+                </div><br>
+                <span id="new_version_installed_or_not">${new_version_installed_or_not}</span>:<br> 
+                <div style="display:flex">
+                <span class="ml-2 px-1 py-1 outlined">core <i>${sw_version.core}</i></span> <span class="ml-2 px-1 py-1 outlined">ui <i>${sw_version.ui}</i></span> ${activate_or_install}
+                </div>
+                <div id="install_warning" class="my-1">Did you know that upgrading the core may break your saved snapshots?<br/>
+                In that case you can still select and activate an older compatible installation to run it ...
+                </div>`;
+
+                $('#update_dialog').html(upgrade_info);
+                $('#activate_or_install').remove();
+                $('#install_warning').remove();
+                $('#version_display').html(`${upgrade_info} 
+                <br>
+                ${version_selector}`);
+                if(!new_version_already_installed)
+                {
+                    show_new_version_toast();
+                }
+            }
+            else
+            {
+                $("#version_display").html(`
+                currently active version (newest):<br>
+                <div style="display:flex">
+                <span class="ml-2 px-1 py-1 outlined">core <i>${wasm_get_core_version()}</i></span> <span class="ml-2 px-1 py-1 outlined">ui <i>${current_ui}</i></span>
+                <button type="button" id="activate_or_install" class="btn btn-success btn-sm px-1 py-1">
+                install</button>
+                </div>
+                <br>
+                ${version_selector}`
+                );
+                $("#activate_or_install").hide();
+            }
+            document.getElementById('version_selector').onchange = function() {
+                let select = document.getElementById('version_selector');
+                document.getElementById('activate_version').disabled=
+                    (select.options[select.selectedIndex].value == current_version);
+            }
+            document.getElementById('remove_version').onclick = function() {
+                let select = document.getElementById('version_selector');
+                let cache_name = select.value;
+                if(cache_name == sw_version.cache_name)
+                {
+                    $("#new_version_installed_or_not").text("new version available");
+                    $("#activate_or_install").text("install").attr("class","btn btn-success btn-sm px-1 mx-1").show();
+                }
+                caches.delete(cache_name);
+                select.options[select.selectedIndex].remove();
+                if(current_version == cache_name)
+                {//when removing the current active version, activate another installed version
+                    if(select.options.length>0)
+                    {
+                        select.selectedIndex=select.options.length-1;
+                        set_settings_cache_value("active_version",select.options[select.selectedIndex].value); 
                     }
                     else
                     {
-                        execute_update();
-                    }
-                })();
+                        set_settings_cache_value("active_version",sw_version.cache_name); 
+                    }   
+                }
+                if(select.options.length==0)
+                {
+                    document.getElementById('remove_version').disabled=true;        
+                    document.getElementById('activate_version').disabled=true;
+                }
+                else 
+                {
+                    document.getElementById('activate_version').disabled=
+                    (select.options[select.selectedIndex].value == current_version);
+                }
             }
-        }        
-    });
+            document.getElementById('activate_version').onclick = function() {
+                let cache_name = document.getElementById('version_selector').value; 
+                set_settings_cache_value("active_version",cache_name);
+                window.location.reload();
+            }
+            let activate_or_install_btn = document.getElementById('activate_or_install');
+            if(activate_or_install_btn != null)
+            {
+                activate_or_install_btn.onclick = () => {
+                    (async ()=>{
+                        let new_version_already_installed=await has_installed_version(sw_version.cache_name); 
+                        if(new_version_already_installed)
+                        {
+                            set_settings_cache_value("active_version",sw_version.cache_name);
+                            window.location.reload();
+                        }
+                        else
+                        {
+                            execute_update();
+                        }
+                    })();
+                }
+            }        
+        });
 
 
-    // ask service worker to send us a version message
-    // wait until it is active
-    navigator.serviceWorker.ready
-    .then( (registration) => {
-        if (registration.active) {
-            registration.active.postMessage('version');
-        }
-    });
+        // ask service worker to send us a version message
+        // wait until it is active
+        navigator.serviceWorker.ready
+        .then( (registration) => {
+            if (registration.active) {
+                registration.active.postMessage('version');
+            }
+        });
 
-    //in the meantime until message from service worker has not yet arrived show this
-    let init_version_display= async ()=>{
-        await get_current_ui_version();
-        $("#version_display").html(`
-        currently active version:<br>
-        <span class="ml-2 px-1 outlined">core <i>${wasm_get_core_version()}</i></span> <span class="ml-2 px-1 outlined">ui <i>${current_ui}</i></span>
-        <br><br>
-        waiting for service worker...`
-        );
-    };
-    init_version_display();
-
+        //in the meantime until message from service worker has not yet arrived show this
+        let init_version_display= async ()=>{
+            await get_current_ui_version();
+            $("#version_display").html(`
+            currently active version:<br>
+            <span class="ml-2 px-1 outlined">core <i>${wasm_get_core_version()}</i></span> <span class="ml-2 px-1 outlined">ui <i>${current_ui}</i></span>
+            <br><br>
+            waiting for service worker...`
+            );
+        };
+        init_version_display();
+    } catch(e)
+    {
+        console.error(e.message);
+    }
 //------- update management end ---
 
     setup_browser_interface();
@@ -2987,19 +3182,30 @@ $('.layer').change( function(event) {
 
 
 //---- rom dialog start
+    rom_restored_from_snapshot=false;
     fill_available_roms=async function (rom_type, select_id){
         let stored_roms=await list_rom_type_entries(rom_type);
         let html_rom_list=`<option value="empty">empty</option>`;
-        let selected_rom=localStorage.getItem(rom_type);
+        if(rom_restored_from_snapshot)
+        {
+            html_rom_list+=`<option value="restored_from_snapshot" hidden selected>restored from snapshot</option>`
+        }
+        let selected_rom=local_storage_get(rom_type);
         for(rom of stored_roms)
         {
-            html_rom_list+= `<option value="${rom.id}" ${selected_rom ==rom.id?"selected":""}>${rom.id}</option>`;
+            html_rom_list+= `<option value="${rom.id}"`;
+            if(!rom_restored_from_snapshot)
+            {
+                html_rom_list+=`${selected_rom ==rom.id?"selected":""}`;
+            }
+            html_rom_list+= `>${rom.id}</option>`;
         }
         $(`#${select_id}`).html(html_rom_list);
 
         document.getElementById(select_id).onchange = function() {
             let selected_rom = document.getElementById(select_id).value; 
             save_setting(rom_type, selected_rom);
+            rom_restored_from_snapshot=false;
             load_roms(true);
         }
     }
@@ -3032,7 +3238,7 @@ $('.layer').change( function(event) {
         }, false);
 
         document.getElementById(id_delete).addEventListener("click", function(e) {
-            let selected_rom=localStorage.getItem(id_local_storage);
+            let selected_rom=local_storage_get(id_local_storage);
             save_setting(id_local_storage, null);
             delete_rom(selected_rom);
             load_roms(true);
@@ -3830,66 +4036,6 @@ function setTheme() {
 }
   
 
-function scaleVMCanvas() {
-        let the_canvas = document.getElementById("canvas");
-        var src_width=clipped_width;//Module._wasm_get_render_width();
-        var src_height=(clipped_height);//*2;//Module._wasm_get_render_height()*2; 
-                
-        if(use_ntsc_pixel)
-        {
-            src_height*=52/44;
-        }
-        var src_ratio = src_width/src_height; //1.25
-        /*
-        if(Module._wasm_get_renderer()==0)
-        {//software renderer only has half of height pixels
-            src_height*=2;
-            src_ratio = src_width/src_height;
-        }
-        */
-
-        var inv_src_ratio = src_height/src_width;
-        var wratio = window.innerWidth / window.innerHeight;
-
-        var topPos=0;
-        if(wratio < src_ratio)
-        {
-            var reducedHeight=window.innerWidth*inv_src_ratio;
-            //all lower than 1.25
-            $("#canvas").css("width", "100%")
-            .css("height", Math.round(reducedHeight)+'px');
-            
-            if($("#virtual_keyboard").is(":hidden"))
-            {   //center vertical, if virtual keyboard and navbar not present
-                topPos=Math.round((window.innerHeight-reducedHeight)/2);
-            }
-            else
-            {//virtual keyboard is present
-                var keyb_height= $("#virtual_keyboard").innerHeight();          
-                //positioning directly stacked onto keyboard          
-                topPos=Math.round(window.innerHeight-reducedHeight-keyb_height);
-            }
-            if(topPos<0)
-            {
-                topPos=0;
-            }
-        }
-        else
-        {
-            //all greater than 1.25
-            if(use_wide_screen)
-            {
-                $("#canvas").css("width", "100%"); 
-            }
-            else
-            {
-                 $("#canvas").css("width", Math.round((window.innerHeight*src_ratio)) +'px');
-            }
-            $("#canvas").css("height", "100%"); 
-        }
-
-        $("#canvas").css("top", topPos + 'px');   
-    };
 
 
 
@@ -3953,14 +4099,14 @@ async function emit_string_autotype(keys_to_emit_array, type_first_key_time=0, r
     }
     for(the_key of keys_to_emit_array)
     {
-        var c64code = translateSymbol(the_key);
-        if(c64code !== undefined)
+        var key_code = translateSymbol(the_key);
+        if(key_code !== undefined)
         {
-            if(c64code.modifier != null)
+            if(key_code.modifier != null)
             {
-                wasm_auto_type(c64code.modifier[0], release_delay, delay);
+                wasm_auto_type(key_code.modifier[0], release_delay, delay);
             }
-            wasm_auto_type(c64code.raw_key[0], release_delay, delay);
+            wasm_auto_type(key_code.raw_key[0], release_delay, delay);
             delay+=release_delay;
         }
     }
@@ -3971,20 +4117,20 @@ async function emit_string(keys_to_emit_array, type_first_key_time=0, release_de
     if(type_first_key_time>0) await sleep(type_first_key_time);
     for(the_key of keys_to_emit_array)
     {
-        var c64code = translateSymbol(the_key);
-        if(c64code !== undefined)
+        var key_code = translateSymbol(the_key);
+        if(key_code !== undefined)
         {
-            if(c64code.modifier != null)
+            if(key_code.modifier != null)
             {
-                wasm_key(c64code.modifier[0], 1);
+                wasm_key(key_code.modifier[0], 1);
             }
-            wasm_key(c64code.raw_key[0], 1);    
+            wasm_key(key_code.raw_key[0], 1);    
             await sleep(release_delay_in_ms);     
-            if(c64code.modifier != null)
+            if(key_code.modifier != null)
             {
-                wasm_key(c64code.modifier[0], 0);
+                wasm_key(key_code.modifier[0], 0);
             }
-            wasm_key(c64code.raw_key[0],0);                
+            wasm_key(key_code.raw_key[0],0);                
         }
     }
 }

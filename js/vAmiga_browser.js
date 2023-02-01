@@ -1,5 +1,5 @@
-var vAmigaWeb_version ="3.0.0_beta1"; //minimum requirement for snapshot version to be compatible
-var compatible_snapshot_version_format=/^(3[.]0[.]0_beta1)$/g
+var vAmigaWeb_version ="2.3.0"; //minimum requirement for snapshot version to be compatible
+var compatible_snapshot_version_format=/^(2[.]3[.]0)$/g
 var current_browser_datasource='snapshots';
 var current_browser_command=null;
 
@@ -385,7 +385,7 @@ var collectors = {
                                 row_renderer(latest_load_query_context, app_title, app_snaps);
                             } catch (error) {
                                 console.error(error);
-                                alert(error.message);    
+                                alert(error.message);
                                 return;
                             }
                         }
@@ -394,8 +394,10 @@ var collectors = {
                 }
                 await get_stored_app_titles(store_renderer);
             }
-            finally
+            catch(e)
             {
+                console.error(`cannot read app titles...${e.message}`);
+                get_data_collector('snapshots').set_busy(false);
             }
         },
         draw_item_into_canvas: function (app_title, teaser_canvas, item){
