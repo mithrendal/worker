@@ -1,7 +1,7 @@
 let flicker_weight=1.0; // set 0.5 or 0.6 for interlace flickering
 function render_canvas_gl(now)
 {
-    update(now);
+    updateTexture(now);
     render();
 }
 
@@ -182,7 +182,7 @@ function resizeCanvasToDisplaySize() {
 
     // Rectify the canvas size if not
     if (needResize) {
-        //canvas.width = displayWidth;
+        canvas.width = displayWidth;
         canvas.height = displayHeight;
         console.log('Resizing canvas to ' + displayWidth + ' x ' + displayHeight);
     }
