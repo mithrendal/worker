@@ -163,6 +163,9 @@ function initWebGL() {
     lfTexture = createTexture(HPIXELS, VPIXELS);
     sfTexture = createTexture(HPIXELS, VPIXELS);
     mergeTexture = createTexture(HPIXELS, 2 * VPIXELS);
+
+    fb = gl.createFramebuffer();
+
 }
 
 function updateTextureRect(x1, y1, x2, y2) {
@@ -280,15 +283,6 @@ function updateTexture() {
     const w = HPIXELS;
     const h = VPIXELS;
 
-/*
-    // Get the emulator texture
-    const frame = $denise.getEmulatorTexture();
-
-    // Store the LOF bits
-    prevLOF = frame.prevLof;
-    currLOF = frame.currLof;
-*/
-    let frame_data = Module._wasm_pixel_buffer();
     let frame_info=Module._wasm_frame_info();
     currLOF=frame_info & 1;
     frame_info = frame_info>>>1; 
@@ -300,36 +294,37 @@ function updateTexture() {
         // console.log('Frame sync mismatch: ' + frameNr + ' -> ' + frame.frameNr);
 
         // Return immediately if we already have this texture
-        if (frame_frameNr == frameNr) return;
+        if (frame_frameNr === frameNr) return;
     }
 
     frameNr = frame_frameNr;
 
+    let frame_data = Module._wasm_pixel_buffer();
+    let tex=new Uint8Array(Module.HEAPU8.buffer, frame_data, w*h<<2);
+
     // Update the GPU texture
-    const tex=new Uint8Array(Module.HEAPU8.buffer, frame_data, w*h*4);
     if (currLOF) {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, lfTexture);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, tex);
     } else {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, sfTexture);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, tex);
     }
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, tex);
 }
 
 function createMergeTexture() {
-    if (currLOF == prevLOF) {
+    gl.useProgram(mergeShaderProgram);
+
+    if (currLOF === prevLOF) {
         if (currLOF) {
             // Case 1: Non-interlace mode, two long frames in a row
-            gl.useProgram(mergeShaderProgram);
             gl.uniform1f(lfWeight, 1.0);
             gl.uniform1f(sfWeight, 1.0);
             gl.uniform1i(lfSampler, 0);
             gl.uniform1i(sfSampler, 0);
         } else {
             // Case 2: Non-interlace mode, two short frames in a row
-            gl.useProgram(mergeShaderProgram);
             gl.uniform1f(lfWeight, 1.0);
             gl.uniform1f(sfWeight, 1.0);
             gl.uniform1i(lfSampler, 1);
@@ -337,27 +332,25 @@ function createMergeTexture() {
         }
     } else {
         // Case 3: Interlace mode, long frame followed by a short frame
-        gl.useProgram(mergeShaderProgram);
         gl.uniform1i(lfSampler, 1);
         gl.uniform1i(sfSampler, 0);
 
         const weight = flicker_weight;//0.5; // TODO: USE OPTION PARAMETER
 
         if (weight) {
-            gl.useProgram(mergeShaderProgram);
             gl.uniform1f(lfWeight, flickerCnt % 4 >= 2 ? 1.0 : weight);
             gl.uniform1f(sfWeight, flickerCnt % 4 >= 2 ? weight : 1.0);
             flickerCnt += 1;
         }
     }
 
-    const fb = gl.createFramebuffer();
+//    const fb = gl.createFramebuffer();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, lfTexture);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, sfTexture);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.viewport(0, 0, HPIXELS, 2 * VPIXELS);
+    gl.viewport(0, 0, HPIXELS, VPIXELS<<1);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, mergeTexture, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
