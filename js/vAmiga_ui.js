@@ -1514,11 +1514,17 @@ function InitWrappers() {
                     render_canvas(now);
             }
             if(Module._wasm_is_worker_built()){
+                rendered_frame_id=0;
                 calculate_and_render=(now)=>
                 {
                     draw_one_frame(); // to gather joystick information 
-                    render_frame(now);
-                    Module._wasm_worker_run();
+                    Module._wasm_worker_run();                    
+                    let current_rendered_frame_id=Module._wasm_frame_info();
+                    if(rendered_frame_id !== current_rendered_frame_id)
+                    {
+                        render_frame(now);
+                        rendered_frame_id = current_rendered_frame_id;
+                    }
                 }
             }
             else
@@ -1527,6 +1533,8 @@ function InitWrappers() {
                 {
                     draw_one_frame(); // to gather joystick information 
                     let behind = Module._wasm_draw_one_frame(now);
+                    if(behind<0)
+                        return;
                     render_frame(now);
                     while(behind>queued_executes)
                     {
@@ -1594,7 +1602,7 @@ function InitWrappers() {
 
 
     connect_audio_processor = async () => {
-        if(audioContext.state === 'suspended') {
+        if(audioContext.state !== 'running') {
             await audioContext.resume();  
         }
         if(audio_connected==true)
@@ -1675,45 +1683,71 @@ function InitWrappers() {
     }
 
 
-    //when app is going to background
-    //window.addEventListener('blur', pause);
-
-    //when app is coming to foreground again, reconnect audio if it has been 'suspended' in the meantime
-    window.addEventListener('focus', async ()=>{ 
-        try { await connect_audio_processor(); } catch(e){ console.error(e);}
+    //when app becomes hidden/visible
+    window.addEventListener("visibilitychange", async () => {
+        if(document.visibilityState == "hidden") {
+           try { audioContext.suspend(); } catch(e){ console.error(e);}
+        }
+        else
+        {
+            try { await connect_audio_processor(); } catch(e){ console.error(e);}
+            add_unlock_user_action();
+        }
     });
-    
+
+    //when app is going to background either visible or hidden
+//    window.addEventListener('blur', ()=>{});
+
+    //when app is coming to foreground again
+    window.addEventListener('focus', async ()=>{         
+        try { await connect_audio_processor(); } catch(e){ console.error(e);}
+        add_unlock_user_action();
+    });
+
+    add_unlock_user_action = function(){
+        //in case we did go suspended reinstall the unlock events
+        document.removeEventListener('click',click_unlock_WebAudio);
+        document.addEventListener('click',click_unlock_WebAudio, false);
+
+        //iOS safari does not bubble click events on canvas so we add this extra event handler here
+        let canvas=document.getElementById('canvas');
+        canvas.removeEventListener('touchstart',touch_unlock_WebAudio);
+        canvas.addEventListener('touchstart',touch_unlock_WebAudio,false);        
+    }
+    remove_unlock_user_action = function(){
+        //if it runs we dont need the unlock handlers, has no effect when handler already removed 
+        document.removeEventListener('click',click_unlock_WebAudio);
+        document.getElementById('canvas').removeEventListener('touchstart',touch_unlock_WebAudio);
+    }
+
     audioContext.onstatechange = () => {
         let state = audioContext.state;
         console.error(`audioContext.state=${state}`);
-        if(state==='suspended'){
-            //in case we did go suspended reinstall the unlock events
-            document.removeEventListener('click',click_unlock_WebAudio);
-            document.addEventListener('click',click_unlock_WebAudio, false);
-
-            //iOS safari does not bubble click events on canvas so we add this extra event handler here
-            let canvas=document.getElementById('canvas');
-            canvas.removeEventListener('touchstart',touch_unlock_WebAudio);
-            canvas.addEventListener('touchstart',touch_unlock_WebAudio,false);        
+        if(state!=='running'){
+            add_unlock_user_action();
         }
-        else if(state === 'running') {
-            //if it runs we dont need the unlock handlers, has no effect when handler already removed 
-            document.removeEventListener('click',click_unlock_WebAudio);
-            document.getElementById('canvas').removeEventListener('touchstart',touch_unlock_WebAudio);
+        else {
+            remove_unlock_user_action();
         }
     }
 
     click_unlock_WebAudio=async function() {
-        try { await connect_audio_processor(); } catch(e){ console.error(e);}
+        try { 
+            await connect_audio_processor(); 
+            if(audioContext.state=="running")
+                remove_unlock_user_action();
+        } catch(e){ console.error(e);}
     }
     touch_unlock_WebAudio=async function() {
-        try { await connect_audio_processor(); } catch(e){ console.error(e);}
+        try { 
+            await connect_audio_processor(); 
+            if(audioContext.state=="running")
+                remove_unlock_user_action();
+        } catch(e){ console.error(e);}
     }    
-    document.addEventListener('click',click_unlock_WebAudio, false);
 
-    //iOS safari does not bubble click events on canvas so we add this extra event handler here
-    document.getElementById('canvas').addEventListener('touchstart',touch_unlock_WebAudio,false);
-
+    add_unlock_user_action();
+    
     get_audio_context=function() {
         if (typeof Module === 'undefined'
         || typeof Module.SDL2 == 'undefined'
@@ -3096,6 +3130,7 @@ $('.layer').change( function(event) {
             canvas.removeEventListener('touchmove',emulate_mouse_touchpad_move, false);
             canvas.removeEventListener('touchend',emulate_mouse_touchpad_end, false);
         }
+        this.blur();
     }
     document.getElementById('port2').onchange = function() {
         port2 = document.getElementById('port2').value;
@@ -3140,7 +3175,7 @@ $('.layer').change( function(event) {
             canvas.removeEventListener('touchmove',emulate_mouse_touchpad_move, false);
             canvas.removeEventListener('touchend',emulate_mouse_touchpad_end, false);
         }
-
+        this.blur();
     }
 
 
