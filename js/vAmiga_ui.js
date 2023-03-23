@@ -331,6 +331,20 @@ function wait_on_message(msg)
     return new Promise(resolve => fire_on_message(msg, resolve));
 }
 
+window.serial_port_out_buffer="";
+function set_serial_port_out_handler(new_handler){
+	window.serial_port_out_handler = new_handler;  
+}
+set_serial_port_out_handler((data) => {
+    //clear buffer when nobody consumes after 4kb of incoming data
+    if(window.serial_port_out_buffer.length>4096)
+    {
+        window.serial_port_out_buffer="";
+    }
+    window.serial_port_out_buffer += String.fromCharCode( data & 0xff );
+    //if we are embedded in a player send serial data to the host page
+    window.parent.postMessage({ msg: 'serial_port_out', value: data},"*");
+});
 function message_handler(msg, data, data2)
 {
     //console.log(`js receives msg:${msg} data:${data}`);
@@ -459,7 +473,12 @@ function message_handler(msg, data, data2)
         $(`#button_${"OPT_FAST_RAM"}`).text(`fast ram=${wasm_get_config_item('FAST_RAM')} KB (snapshot)`);
     
         rom_restored_from_snapshot=true;
+    } 
+    else if(msg == "MSG_SER_OUT")
+    {
+      serial_port_out_handler(data);
     }
+
 
 }
 
@@ -1599,9 +1618,7 @@ function InitWrappers() {
     wasm_get_config_item = Module.cwrap('wasm_get_config_item', 'number', ['string']);
     wasm_get_core_version = Module.cwrap('wasm_get_core_version', 'string');
 
-
-
-    connect_audio_processor = async () => {
+    connect_audio_processor_standard = async () => {
         if(audioContext.state !== 'running') {
             await audioContext.resume();  
         }
@@ -1682,6 +1699,48 @@ function InitWrappers() {
         worklet_node.connect(audioContext.destination);        
     }
 
+    connect_audio_processor_shared_memory= async ()=>{
+        if(audioContext.state !== 'running') {
+            await audioContext.resume();  
+        }
+        if(audio_connected==true)
+            return; 
+        if(audioContext.state === 'suspended') {
+            return;  
+        }
+        audio_connected=true;
+
+        audioContext.onstatechange = () => console.log('Audio Context: state = ' + audioContext.state);
+        let gainNode = audioContext.createGain();
+        gainNode.gain.value = 0.15;
+        gainNode.connect(audioContext.destination);
+        wasm_set_sample_rate(audioContext.sampleRate);
+        await audioContext.audioWorklet.addModule('js/vAmiga_audioprocessor_sharedarraybuffer.js');
+        const audioNode = new AudioWorkletNode(audioContext, 'vAmiga_audioprocessor_sharedarraybuffer', {
+            outputChannelCount: [2],
+            processorOptions: {
+                pointers: [Module._wasm_leftChannelBuffer(), Module._wasm_rightChannelBuffer()],
+                buffer: Module.HEAPF32.buffer,
+                length: 2048
+            }
+        });
+        audioNode.port.onmessage = (e) => {
+            Module._wasm_update_audio(e.data);
+        };
+        audioNode.connect(audioContext.destination);
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
+    }
+
+    if(Module._wasm_is_worker_built())
+    {
+        connect_audio_processor=connect_audio_processor_shared_memory;
+    }
+    else
+    {
+        connect_audio_processor=connect_audio_processor_standard;
+    }
 
     //when app becomes hidden/visible
     window.addEventListener("visibilitychange", async () => {
@@ -1884,7 +1943,20 @@ function InitWrappers() {
 
     has_pointer_lock=false;
     try_to_lock_pointer=0;
+    has_pointer_lock_fallback=false;
+    window.last_mouse_x=0;
+    window.last_mouse_y=0;
+
     request_pointerlock = async function() {
+        if(canvas.requestPointerLock === undefined)
+        {
+            if(!has_pointer_lock_fallback)
+            {
+                add_pointer_lock_fallback();      
+                has_pointer_lock_fallback=true;
+            }
+            return;
+        }
         if(!has_pointer_lock && try_to_lock_pointer <20)
         {
             try_to_lock_pointer++;
@@ -1898,6 +1970,18 @@ function InitWrappers() {
         }
     };
     
+    window.add_pointer_lock_fallback=()=>{
+        document.addEventListener("mousemove", updatePosition_fallback, false); 
+        document.addEventListener("mousedown", mouseDown, false);
+        document.addEventListener("mouseup", mouseUp, false);
+    };
+    window.remove_pointer_lock_fallback=()=>{
+        document.removeEventListener("mousemove", updatePosition_fallback, false); 
+        document.removeEventListener("mousedown", mouseDown, false);
+        document.removeEventListener("mouseup", mouseUp, false);
+        has_pointer_lock_fallback=false;
+    };
+
     // Hook pointer lock state change events for different browsers
     document.addEventListener('pointerlockchange', lockChangeAlert, false);
     document.addEventListener('mozpointerlockchange', lockChangeAlert, false);
@@ -1923,6 +2007,24 @@ function InitWrappers() {
     var mouse_port=1;
     function updatePosition(e) {
         Module._wasm_mouse(mouse_port,e.movementX,e.movementY);
+    }
+    function updatePosition_fallback(e) {
+        let movementX=e.screenX-window.last_mouse_x;
+        let movementY=e.screenY-window.last_mouse_y;
+        window.last_mouse_x=e.screenX;
+        window.last_mouse_y=e.screenY;
+        let border_speed=4;
+        let border_pixel=2;
+    
+        if(e.screenX<=border_pixel)
+          movementX=-border_speed;
+        if(e.screenX>=window.innerWidth-border_pixel)
+          movementX=border_speed;
+        if(e.screenY<=border_pixel)
+          movementY=-border_speed;
+        if(e.screenY>=window.innerHeight-border_pixel)
+          movementY=border_speed;        
+        Module._wasm_mouse(mouse_port,movementX,movementY);  
     }
     function mouseDown(e) {
         Module._wasm_mouse_button(mouse_port,e.which, 1/* down */);
@@ -2523,14 +2625,7 @@ $('.layer').change( function(event) {
         }
         $("#output_row").hide();
     });
-    
-    /*document.getElementById('button_fullscreen').onclick = function() {
-        if (wasm_toggleFullscreen != null) {
-            wasm_toggleFullscreen();
-        }
-        document.getElementById('canvas').focus();
-    }
-    */
+
     document.getElementById('button_reset').onclick = function() {
         wasm_reset();
 
@@ -3115,6 +3210,7 @@ $('.layer').change( function(event) {
         else if(port2 != 'mouse')
         {
             canvas.removeEventListener('click', request_pointerlock);
+            remove_pointer_lock_fallback();
         }
         if(port1.startsWith('mouse touch'))
         {
@@ -3160,6 +3256,7 @@ $('.layer').change( function(event) {
         else if(port1 != 'mouse')
         {
             canvas.removeEventListener('click', request_pointerlock);
+            remove_pointer_lock_fallback();
         }
         if(port2.startsWith('mouse touch'))
         {
