@@ -1501,7 +1501,15 @@ function InitWrappers() {
         Module._free(file_slot_wasmbuf);
         return retVal;                    
     }
-    
+    wasm_write_bytes_to_ser = function (bytes_to_send) {
+        for(let b of bytes_to_send)
+        {
+            Module._wasm_write_byte_to_ser(b);
+        }
+    }
+    wasm_write_byte_to_ser = function (byte_to_send) {
+            Module._wasm_write_byte_to_ser(byte_to_send);
+    }
     wasm_key = Module.cwrap('wasm_key', 'undefined', ['number', 'number']);
     wasm_toggleFullscreen = Module.cwrap('wasm_toggleFullscreen', 'undefined');
     wasm_joystick = Module.cwrap('wasm_joystick', 'undefined', ['string']);
@@ -1913,7 +1921,22 @@ function InitWrappers() {
                 configure_file_dialog(reset=false);
             }
         }
-    }); 
+        else if(event.data.cmd == "ser:")
+        {
+            if(event.data.text !== undefined)
+            {
+                wasm_write_string_to_ser(event.data.text);
+            }
+            else if (event.data.byte !== undefined )
+            {
+                Module._wasm_write_byte_to_ser(event.data.byte);
+            }
+            else if (event.data.bytes !== undefined )
+            {
+                wasm_write_bytes_to_ser(event.data.bytes);
+            }
+        }
+    });
     
     dark_switch = document.getElementById('dark_switch');
 
@@ -2644,6 +2667,7 @@ $('.layer').change( function(event) {
         if(running)
         {        
             wasm_halt();
+            try { audioContext.suspend(); } catch(e){ console.error(e);}
             running = false;
             //set run icon
             $('#button_run').html(`<svg class="bi bi-play-fill" width="1.6em" height="1.6em" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -2660,9 +2684,9 @@ $('.layer').change( function(event) {
             //have to catch an intentional "unwind" exception here, which is thrown
             //by emscripten_set_main_loop() after emscripten_cancel_main_loop();
             //to simulate infinity gamelloop see emscripten API for more info ... 
-            try{wasm_run();} catch(e) {}
+            try{wasm_run();} catch(e) {}        
+            try {connect_audio_processor();} catch(e){ console.error(e);}
             running = true;
-
         }
         
         //document.getElementById('canvas').focus();
