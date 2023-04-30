@@ -1766,9 +1766,12 @@ function InitWrappers() {
 //    window.addEventListener('blur', ()=>{});
 
     //when app is coming to foreground again
-    window.addEventListener('focus', async ()=>{         
-        try { await connect_audio_processor(); } catch(e){ console.error(e);}
-        add_unlock_user_action();
+    window.addEventListener('focus', async ()=>{
+        if(emulator_currently_runs)
+        {
+            try { await connect_audio_processor(); } catch(e){ console.error(e);}
+            add_unlock_user_action();
+        }
     });
 
     add_unlock_user_action = function(){
